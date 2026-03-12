@@ -114,10 +114,14 @@ func TestSearchSupplierItems(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"message":[{"value":"SUP-001"}]}`))
+		case "/api/resource/Item Supplier":
+			if got := r.URL.Query().Get("parent"); got != "Item" {
+				http.Error(w, "missing parent doctype", http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":[{"parent":"ITEM-001"}]}`))
 		case "/api/resource/Item":
 			_, _ = w.Write([]byte(`{"data":[{"name":"ITEM-001","item_name":"Rice","stock_uom":"Kg"}]}`))
-		case "/api/resource/Item/ITEM-001":
-			_, _ = w.Write([]byte(`{"data":{"default_supplier":"","supplier_items":[{"supplier":"SUP-001"}]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -131,6 +135,40 @@ func TestSearchSupplierItems(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Code != "ITEM-001" || items[0].UOM != "Kg" {
 		t.Fatalf("unexpected supplier items: %+v", items)
+	}
+}
+
+func TestListPurchaseReceiptCommentsBatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/resource/Comment" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[
+			{"name":"COMM-001","content":"First","creation":"2026-03-10 10:00:00","reference_name":"MAT-PRE-0001"},
+			{"name":"COMM-002","content":"Second","creation":"2026-03-10 10:05:00","reference_name":"MAT-PRE-0001"},
+			{"name":"COMM-003","content":"Third","creation":"2026-03-10 11:00:00","reference_name":"MAT-PRE-0002"}
+		]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(&http.Client{Timeout: 3 * time.Second})
+	itemsByName, err := client.ListPurchaseReceiptCommentsBatch(
+		context.Background(),
+		server.URL,
+		"key",
+		"secret",
+		[]string{"MAT-PRE-0001", "MAT-PRE-0002"},
+		10,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(itemsByName["MAT-PRE-0001"]) != 2 {
+		t.Fatalf("expected 2 comments for MAT-PRE-0001, got %+v", itemsByName["MAT-PRE-0001"])
+	}
+	if len(itemsByName["MAT-PRE-0002"]) != 1 {
+		t.Fatalf("expected 1 comment for MAT-PRE-0002, got %+v", itemsByName["MAT-PRE-0002"])
 	}
 }
 
@@ -383,7 +421,7 @@ func TestCreateDraftAndSubmitPurchaseReceipt(t *testing.T) {
 		t.Fatalf("unexpected draft: %+v", draft)
 	}
 
-	result, err := client.ConfirmAndSubmitPurchaseReceipt(context.Background(), server.URL, "key", "secret", "MAT-PRE-0001", 7)
+	result, err := client.ConfirmAndSubmitPurchaseReceipt(context.Background(), server.URL, "key", "secret", "MAT-PRE-0001", 7, 0, "", "")
 	if err != nil {
 		t.Fatalf("unexpected submit error: %v", err)
 	}
@@ -404,6 +442,109 @@ func TestCreateDraftAndSubmitPurchaseReceipt(t *testing.T) {
 	}
 	if submitPayload["doc"] == nil {
 		t.Fatalf("unexpected submit payload: %+v", submitPayload)
+	}
+}
+
+func TestConfirmPurchaseReceiptClearsRejectedWarehouseWhenSameAsAccepted(t *testing.T) {
+	var updatePayload map[string]interface{}
+
+	docResponse := `{"data":{"doctype":"Purchase Receipt","name":"MAT-PRE-0002","supplier":"SUP-001","posting_date":"2026-03-07","supplier_delivery_note":"TG:+998901234567:20260307120000","items":[{"item_code":"ITEM-001","item_name":"Rice","qty":10,"uom":"Kg","stock_uom":"Kg","warehouse":"Stores - CH","rejected_warehouse":"Stores - CH","conversion_factor":1}]}}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/resource/Warehouse":
+			_, _ = w.Write([]byte(`{"data":[{"name":"All Warehouses - A","is_group":1},{"name":"Stores - CH","is_group":0},{"name":"Finished Goods - A","is_group":0}]}`))
+		case "/api/resource/Purchase Receipt/MAT-PRE-0002", "/api/resource/Purchase%20Receipt/MAT-PRE-0002":
+			switch r.Method {
+			case http.MethodGet:
+				_, _ = w.Write([]byte(docResponse))
+			case http.MethodPut:
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &updatePayload)
+				_, _ = w.Write([]byte(`{"data":{"name":"MAT-PRE-0002"}}`))
+			default:
+				http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			}
+		case "/api/method/frappe.client.submit":
+			_, _ = w.Write([]byte(`{"message":{"name":"MAT-PRE-0002","docstatus":1}}`))
+		case "/api/resource/Comment":
+			_, _ = w.Write([]byte(`{"data":{"name":"COMM-0001"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(&http.Client{Timeout: 3 * time.Second})
+	_, err := client.ConfirmAndSubmitPurchaseReceipt(context.Background(), server.URL, "key", "secret", "MAT-PRE-0002", 7, 3, "Yaroqsiz", "partial test")
+	if err != nil {
+		t.Fatalf("unexpected submit error: %v", err)
+	}
+
+	items, ok := updatePayload["items"].([]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("unexpected update payload: %+v", updatePayload)
+	}
+	first, ok := items[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected item payload: %+v", items[0])
+	}
+	if got := first["rejected_warehouse"]; got != "Finished Goods - A" {
+		t.Fatalf("expected alternate rejected_warehouse, got %+v", got)
+	}
+	if got := first["received_qty"]; got != float64(10) {
+		t.Fatalf("expected received_qty to include accepted+rejected, got %+v", got)
+	}
+}
+
+func TestConfirmPurchaseReceiptRollsBackDraftWhenSubmitFails(t *testing.T) {
+	updateBodies := make([]map[string]interface{}, 0, 2)
+
+	docResponse := `{"data":{"doctype":"Purchase Receipt","name":"MAT-PRE-0003","supplier":"SUP-001","posting_date":"2026-03-07","supplier_delivery_note":"TG:+998901234567:20260307120000:10.0000","remarks":"","items":[{"item_code":"ITEM-001","item_name":"Rice","qty":10,"received_qty":10,"uom":"Kg","stock_uom":"Kg","warehouse":"Stores - CH","conversion_factor":1}]}}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/resource/Warehouse":
+			_, _ = w.Write([]byte(`{"data":[{"name":"Stores - CH","is_group":0},{"name":"Finished Goods - A","is_group":0}]}`))
+		case "/api/resource/Purchase Receipt/MAT-PRE-0003", "/api/resource/Purchase%20Receipt/MAT-PRE-0003":
+			switch r.Method {
+			case http.MethodGet:
+				_, _ = w.Write([]byte(docResponse))
+			case http.MethodPut:
+				raw, _ := io.ReadAll(r.Body)
+				var body map[string]interface{}
+				_ = json.Unmarshal(raw, &body)
+				updateBodies = append(updateBodies, body)
+				_, _ = w.Write([]byte(`{"data":{"name":"MAT-PRE-0003"}}`))
+			default:
+				http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			}
+		case "/api/method/frappe.client.submit":
+			http.Error(w, `{"exception":"submit failed"}`, http.StatusBadRequest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(&http.Client{Timeout: 3 * time.Second})
+	_, err := client.ConfirmAndSubmitPurchaseReceipt(context.Background(), server.URL, "key", "secret", "MAT-PRE-0003", 7, 3, "Yaroqsiz", "rollback test")
+	if err == nil {
+		t.Fatal("expected submit error")
+	}
+	if len(updateBodies) != 2 {
+		t.Fatalf("expected 2 updates (apply + rollback), got %d", len(updateBodies))
+	}
+	secondItems, ok := updateBodies[1]["items"].([]interface{})
+	if !ok || len(secondItems) != 1 {
+		t.Fatalf("unexpected rollback payload: %+v", updateBodies[1])
+	}
+	second, ok := secondItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected rollback item payload: %+v", secondItems[0])
+	}
+	if second["qty"] != float64(10) {
+		t.Fatalf("expected rollback to restore qty=10, got %+v", second["qty"])
 	}
 }
 
@@ -471,6 +612,34 @@ func TestListPendingPurchaseReceiptsReturnsAllDrafts(t *testing.T) {
 	}
 	if items[0].Name != "MAT-PRE-0001" || items[1].Name != "MAT-PRE-0002" {
 		t.Fatalf("unexpected drafts: %+v", items)
+	}
+}
+
+func TestListPendingPurchaseReceiptsUsesInlineDataWhenAvailable(t *testing.T) {
+	detailFetches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/resource/Purchase Receipt":
+			_, _ = w.Write([]byte(`{"data":[{"name":"MAT-PRE-0001","supplier":"SUP-001","supplier_name":"Abdulloh","posting_date":"2026-03-09","supplier_delivery_note":"","status":"Draft","docstatus":0,"currency":"UZS","remarks":"","items":[{"item_code":"ITEM-001","item_name":"Rice","qty":10,"amount":120,"uom":"Kg","stock_uom":"Kg","warehouse":"Stores - A","conversion_factor":1}]}]}`))
+		case strings.Contains(r.URL.Path, "/api/resource/Purchase%20Receipt/"):
+			detailFetches++
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(&http.Client{Timeout: 3 * time.Second})
+	items, err := client.ListPendingPurchaseReceipts(context.Background(), server.URL, "key", "secret", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "MAT-PRE-0001" || items[0].Amount != 120 {
+		t.Fatalf("unexpected drafts: %+v", items)
+	}
+	if detailFetches != 0 {
+		t.Fatalf("expected no detail fetches, got %d", detailFetches)
 	}
 }
 

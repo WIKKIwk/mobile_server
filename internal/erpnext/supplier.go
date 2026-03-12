@@ -26,8 +26,11 @@ func (c *Client) SearchSuppliers(ctx context.Context, baseURL, apiKey, apiSecret
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 {
 		limit = 20
+	}
+	if limit > 500 {
+		limit = 500
 	}
 
 	filtersJSON, _ := json.Marshal([][]interface{}{
@@ -45,6 +48,7 @@ func (c *Client) SearchSuppliers(ctx context.Context, baseURL, apiKey, apiSecret
 			{"name", "like", like},
 			{"supplier_name", "like", like},
 			{"mobile_no", "like", like},
+			{"supplier_details", "like", like},
 		})
 		params.Set("or_filters", string(orFiltersJSON))
 	}
@@ -75,9 +79,10 @@ func (c *Client) SearchSuppliers(ctx context.Context, baseURL, apiKey, apiSecret
 			phone = extractPhoneFromSupplierDetails(row.Details)
 		}
 		items = append(items, Supplier{
-			ID:    strings.TrimSpace(row.Name),
-			Name:  name,
-			Phone: phone,
+			ID:      strings.TrimSpace(row.Name),
+			Name:    name,
+			Phone:   phone,
+			Details: strings.TrimSpace(row.Details),
 		})
 	}
 	return items, nil
@@ -170,11 +175,35 @@ func (c *Client) GetSupplier(ctx context.Context, baseURL, apiKey, apiSecret, id
 	}
 
 	return Supplier{
-		ID:    strings.TrimSpace(payload.Data.Name),
-		Name:  name,
-		Phone: phone,
-		Image: strings.TrimSpace(payload.Data.Image),
+		ID:      strings.TrimSpace(payload.Data.Name),
+		Name:    name,
+		Phone:   phone,
+		Image:   strings.TrimSpace(payload.Data.Image),
+		Details: strings.TrimSpace(payload.Data.Details),
 	}, nil
+}
+
+func (c *Client) UpdateSupplierDetails(ctx context.Context, baseURL, apiKey, apiSecret, id, details string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	endpoint := normalized + "/api/resource/Supplier/" + url.PathEscape(strings.TrimSpace(id))
+	return c.doJSONRequest(ctx, http.MethodPut, endpoint, apiKey, apiSecret, map[string]string{
+		"supplier_details": strings.TrimSpace(details),
+	}, nil)
+}
+
+func (c *Client) UpdateSupplierContact(ctx context.Context, baseURL, apiKey, apiSecret, id, phone, details string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	endpoint := normalized + "/api/resource/Supplier/" + url.PathEscape(strings.TrimSpace(id))
+	return c.doJSONRequest(ctx, http.MethodPut, endpoint, apiKey, apiSecret, map[string]string{
+		"mobile_no":        strings.TrimSpace(phone),
+		"supplier_details": strings.TrimSpace(details),
+	}, nil)
 }
 
 func (c *Client) UploadSupplierImage(ctx context.Context, baseURL, apiKey, apiSecret, supplierID, filename, contentType string, content []byte) (string, error) {
@@ -202,6 +231,40 @@ func (c *Client) UploadSupplierImage(ctx context.Context, baseURL, apiKey, apiSe
 	}
 
 	return fileURL, nil
+}
+
+func (c *Client) DownloadFile(ctx context.Context, baseURL, apiKey, apiSecret, fileURL string) (string, []byte, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return "", nil, err
+	}
+	trimmed := strings.TrimSpace(fileURL)
+	if trimmed == "" {
+		return "", nil, fmt.Errorf("file url is required")
+	}
+	endpoint := trimmed
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		endpoint = strings.TrimRight(normalized, "/") + trimmed
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("token %s:%s", apiKey, apiSecret))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	return resp.Header.Get("Content-Type"), body, nil
 }
 
 func (c *Client) uploadFile(ctx context.Context, baseURL, apiKey, apiSecret, supplierID, filename, contentType string, content []byte) (string, error) {

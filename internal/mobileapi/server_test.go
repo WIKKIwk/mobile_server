@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"mobile_server/internal/erpnext"
@@ -14,20 +15,93 @@ import (
 )
 
 type fakeERPClient struct {
-	suppliers         []erpnext.Supplier
-	uploadedAvatarURL string
+	suppliers          []erpnext.Supplier
+	items              []erpnext.Item
+	supplierItems      map[string]map[string]bool
+	uploadedAvatarURL  string
+	comments           map[string][]erpnext.Comment
+	pendingReceipts    []erpnext.PurchaseReceiptDraft
+	supplierReceipts   []erpnext.PurchaseReceiptDraft
+	telegramReceipts   []erpnext.PurchaseReceiptDraft
+	batchCommentKeys   [][]string
+	updateRemarksErr   error
+	lastSupplierLimit  int
+	lastSupplierOffset int
+	lastTelegramLimit  int
+	lastTelegramOffset int
+}
+
+func (f *fakeERPClient) SearchItems(_ context.Context, _, _, _, query string, limit int) ([]erpnext.Item, error) {
+	return filterFakeItems(f.items, query, limit), nil
 }
 
 func (f *fakeERPClient) SearchSuppliers(_ context.Context, _, _, _, _ string, _ int) ([]erpnext.Supplier, error) {
 	return f.suppliers, nil
 }
 
+func (f *fakeERPClient) GetItemsByCodes(_ context.Context, _, _, _ string, itemCodes []string) ([]erpnext.Item, error) {
+	result := make([]erpnext.Item, 0, len(itemCodes))
+	for _, code := range itemCodes {
+		for _, item := range f.items {
+			if item.Code == code {
+				result = append(result, item)
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeERPClient) CreateItem(_ context.Context, _, _, _ string, input erpnext.CreateItemInput) (erpnext.Item, error) {
+	item := erpnext.Item{
+		Code: input.Code,
+		Name: input.Name,
+		UOM:  input.UOM,
+	}
+	f.items = append(f.items, item)
+	return item, nil
+}
+
 func (f *fakeERPClient) SearchWarehouses(_ context.Context, _, _, _, _ string, _ int) ([]erpnext.Warehouse, error) {
 	return []erpnext.Warehouse{{Name: "Stores - A"}}, nil
 }
 
+func (f *fakeERPClient) EnsureSupplier(_ context.Context, _, _, _ string, input erpnext.CreateSupplierInput) (erpnext.Supplier, error) {
+	return erpnext.Supplier{ID: input.Name, Name: input.Name, Phone: input.Phone}, nil
+}
+
 func (f *fakeERPClient) SearchSupplierItems(_ context.Context, _, _, _, _, _ string, _ int) ([]erpnext.Item, error) {
-	return nil, nil
+	return f.items, nil
+}
+
+func (f *fakeERPClient) ListAssignedSupplierItems(_ context.Context, _, _, _, supplier string, _ int) ([]erpnext.Item, error) {
+	result := make([]erpnext.Item, 0)
+	assigned := f.supplierItems[strings.TrimSpace(supplier)]
+	for _, item := range f.items {
+		if assigned[item.Code] {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeERPClient) AssignSupplierToItem(_ context.Context, _, _, _, itemCode, supplier string) error {
+	if f.supplierItems == nil {
+		f.supplierItems = map[string]map[string]bool{}
+	}
+	if f.supplierItems[supplier] == nil {
+		f.supplierItems[supplier] = map[string]bool{}
+	}
+	f.supplierItems[supplier][itemCode] = true
+	return nil
+}
+
+func (f *fakeERPClient) RemoveSupplierFromItem(_ context.Context, _, _, _, itemCode, supplier string) error {
+	if f.supplierItems == nil || f.supplierItems[supplier] == nil {
+		return nil
+	}
+	delete(f.supplierItems[supplier], itemCode)
+	return nil
 }
 
 func (f *fakeERPClient) GetSupplier(_ context.Context, _, _, _, id string) (erpnext.Supplier, error) {
@@ -39,19 +113,137 @@ func (f *fakeERPClient) GetSupplier(_ context.Context, _, _, _, id string) (erpn
 	return erpnext.Supplier{}, nil
 }
 
+func (f *fakeERPClient) UpdateSupplierDetails(_ context.Context, _, _, _, id, details string) error {
+	for index, item := range f.suppliers {
+		if item.ID == id {
+			item.Details = details
+			f.suppliers[index] = item
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeERPClient) UpdateSupplierContact(_ context.Context, _, _, _, id, phone, details string) error {
+	for index, item := range f.suppliers {
+		if item.ID == id {
+			item.Phone = phone
+			item.Details = details
+			f.suppliers[index] = item
+			return nil
+		}
+	}
+	return nil
+}
+
 func (f *fakeERPClient) ListPendingPurchaseReceipts(_ context.Context, _, _, _ string, _ int) ([]erpnext.PurchaseReceiptDraft, error) {
+	return f.ListPendingPurchaseReceiptsPage(context.Background(), "", "", "", 0, 0)
+}
+
+func (f *fakeERPClient) ListPendingPurchaseReceiptsPage(_ context.Context, _, _, _ string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error) {
+	if f.pendingReceipts != nil {
+		return sliceReceiptPage(f.pendingReceipts, limit, offset), nil
+	}
 	return nil, nil
 }
 
-func (f *fakeERPClient) ListSupplierPurchaseReceipts(_ context.Context, _, _, _, _ string, _ int) ([]erpnext.PurchaseReceiptDraft, error) {
-	return nil, nil
+func (f *fakeERPClient) ListTelegramPurchaseReceipts(_ context.Context, _, _, _ string, _ int) ([]erpnext.PurchaseReceiptDraft, error) {
+	return f.ListTelegramPurchaseReceiptsPage(context.Background(), "", "", "", 0, 0)
+}
+
+func (f *fakeERPClient) ListTelegramPurchaseReceiptsPage(_ context.Context, _, _, _ string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error) {
+	f.lastTelegramLimit = limit
+	f.lastTelegramOffset = offset
+	if f.telegramReceipts != nil {
+		return sliceReceiptPage(f.telegramReceipts, limit, offset), nil
+	}
+	return sliceReceiptPage([]erpnext.PurchaseReceiptDraft{
+		{
+			Name:                 "MAT-PRE-0001",
+			SupplierName:         "Abdulloh",
+			SupplierDeliveryNote: "TG:+998900000000|25",
+			ItemCode:             "ITEM-001",
+			ItemName:             "Rice",
+			Qty:                  25,
+			UOM:                  "Kg",
+			PostingDate:          "2026-03-10",
+		},
+	}, limit, offset), nil
+}
+
+func (f *fakeERPClient) ListSupplierPurchaseReceipts(_ context.Context, _, _, _, supplier string, limit int) ([]erpnext.PurchaseReceiptDraft, error) {
+	return f.ListSupplierPurchaseReceiptsPage(context.Background(), "", "", "", supplier, limit, 0)
+}
+
+func (f *fakeERPClient) ListSupplierPurchaseReceiptsPage(_ context.Context, _, _, _, _ string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error) {
+	f.lastSupplierLimit = limit
+	f.lastSupplierOffset = offset
+	if f.supplierReceipts != nil {
+		return sliceReceiptPage(f.supplierReceipts, limit, offset), nil
+	}
+	return sliceReceiptPage([]erpnext.PurchaseReceiptDraft{
+		{
+			Name:                 "MAT-PRE-0001",
+			Supplier:             "SUP-001",
+			SupplierName:         "Abdulloh",
+			SupplierDeliveryNote: "TG:+998900000000|25",
+			ItemCode:             "ITEM-001",
+			ItemName:             "Rice",
+			Qty:                  25,
+			UOM:                  "Kg",
+			PostingDate:          "2026-03-10",
+		},
+	}, limit, offset), nil
+}
+
+func (f *fakeERPClient) GetPurchaseReceipt(_ context.Context, _, _, _, name string) (erpnext.PurchaseReceiptDraft, error) {
+	return erpnext.PurchaseReceiptDraft{
+		Name:                 name,
+		Supplier:             "SUP-001",
+		SupplierName:         "Abdulloh",
+		SupplierDeliveryNote: "TG:+998900000000|25",
+		ItemCode:             "ITEM-001",
+		ItemName:             "Rice",
+		Qty:                  25,
+		UOM:                  "Kg",
+		PostingDate:          "2026-03-10",
+	}, nil
+}
+
+func (f *fakeERPClient) ListPurchaseReceiptComments(_ context.Context, _, _, _, name string, _ int) ([]erpnext.Comment, error) {
+	return append([]erpnext.Comment(nil), f.comments[name]...), nil
+}
+
+func (f *fakeERPClient) ListPurchaseReceiptCommentsBatch(_ context.Context, _, _, _ string, names []string, _ int) (map[string][]erpnext.Comment, error) {
+	f.batchCommentKeys = append(f.batchCommentKeys, append([]string(nil), names...))
+	result := make(map[string][]erpnext.Comment, len(names))
+	for _, name := range names {
+		result[name] = append([]erpnext.Comment(nil), f.comments[name]...)
+	}
+	return result, nil
+}
+
+func (f *fakeERPClient) AddPurchaseReceiptComment(_ context.Context, _, _, _, name, content string) error {
+	if f.comments == nil {
+		f.comments = map[string][]erpnext.Comment{}
+	}
+	f.comments[name] = append(f.comments[name], erpnext.Comment{
+		ID:        "COMM-001",
+		Content:   content,
+		CreatedAt: "2026-03-11 10:00:00",
+	})
+	return nil
+}
+
+func (f *fakeERPClient) UpdatePurchaseReceiptRemarks(_ context.Context, _, _, _, name, remarks string) error {
+	return f.updateRemarksErr
 }
 
 func (f *fakeERPClient) CreateDraftPurchaseReceipt(_ context.Context, _, _, _ string, _ erpnext.CreatePurchaseReceiptInput) (erpnext.PurchaseReceiptDraft, error) {
 	return erpnext.PurchaseReceiptDraft{}, nil
 }
 
-func (f *fakeERPClient) ConfirmAndSubmitPurchaseReceipt(_ context.Context, _, _, _, _ string, _ float64) (erpnext.PurchaseReceiptSubmissionResult, error) {
+func (f *fakeERPClient) ConfirmAndSubmitPurchaseReceipt(_ context.Context, _, _, _, _ string, _, _ float64, _, _ string) (erpnext.PurchaseReceiptSubmissionResult, error) {
 	return erpnext.PurchaseReceiptSubmissionResult{}, nil
 }
 
@@ -66,6 +258,44 @@ func (f *fakeERPClient) UploadSupplierImage(_ context.Context, _, _, _, supplier
 		}
 	}
 	return fileURL, nil
+}
+
+func (f *fakeERPClient) DownloadFile(_ context.Context, _, _, _, fileURL string) (string, []byte, error) {
+	return "image/png", []byte("pngdata"), nil
+}
+
+func filterFakeItems(items []erpnext.Item, query string, limit int) []erpnext.Item {
+	if limit <= 0 || limit > len(items) {
+		limit = len(items)
+	}
+	if query == "" {
+		return append([]erpnext.Item(nil), items[:limit]...)
+	}
+	lowerQuery := strings.ToLower(query)
+	result := make([]erpnext.Item, 0, limit)
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Code), lowerQuery) ||
+			strings.Contains(strings.ToLower(item.Name), lowerQuery) {
+			result = append(result, item)
+		}
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result
+}
+
+func sliceReceiptPage(items []erpnext.PurchaseReceiptDraft, limit, offset int) []erpnext.PurchaseReceiptDraft {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []erpnext.PurchaseReceiptDraft{}
+	}
+	if limit <= 0 || offset+limit > len(items) {
+		limit = len(items) - offset
+	}
+	return append([]erpnext.PurchaseReceiptDraft(nil), items[offset:offset+limit]...)
 }
 
 func TestServerLoginAndMeFlow(t *testing.T) {
@@ -93,6 +323,7 @@ func TestServerLoginAndMeFlow(t *testing.T) {
 		"20WERKA0001",
 		"+998901111111",
 		"Werka",
+		nil,
 		nil,
 	))
 	ts := httptest.NewServer(server.Handler())
@@ -149,6 +380,7 @@ func TestServerLogoutInvalidatesSession(t *testing.T) {
 		"+998901111111",
 		"Werka",
 		nil,
+		nil,
 	))
 	token, err := server.sessions.Create(Principal{Role: RoleSupplier, DisplayName: "Abdulloh"})
 	if err != nil {
@@ -191,6 +423,7 @@ func TestServerProfileUpdateAndAvatarFlow(t *testing.T) {
 		"+998901111111",
 		"Werka",
 		profiles,
+		nil,
 	))
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
@@ -268,10 +501,720 @@ func TestServerProfileUpdateAndAvatarFlow(t *testing.T) {
 	if err := json.NewDecoder(avatarResp.Body).Decode(&avatarPrincipal); err != nil {
 		t.Fatalf("failed to decode avatar response: %v", err)
 	}
-	if avatarPrincipal.AvatarURL != "http://localhost:8000/files/SUP-001-avatar.png" {
+	expectedAvatarURL := ts.URL + "/v1/mobile/profile/avatar/view?token=" + loginPayload.Token
+	if avatarPrincipal.AvatarURL != expectedAvatarURL {
 		t.Fatalf("unexpected avatar url: %+v", avatarPrincipal)
 	}
 	if fakeERP.uploadedAvatarURL == "" {
 		t.Fatal("expected fake ERP upload to run")
+	}
+}
+
+func TestServerAdminSupplierManagementFlow(t *testing.T) {
+	adminStore := NewAdminSupplierStore(t.TempDir() + "/admin_suppliers.json")
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			suppliers: []erpnext.Supplier{
+				{ID: "SUP-001", Name: "Abdulloh", Phone: "+998901234567"},
+			},
+			items: []erpnext.Item{
+				{Code: "ITEM-001", Name: "Rice", UOM: "Kg"},
+				{Code: "ITEM-002", Name: "Oil", UOM: "L"},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		adminStore,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleAdmin, DisplayName: "Admin"})
+	if err != nil {
+		t.Fatalf("failed to create admin session: %v", err)
+	}
+
+	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/suppliers/summary", nil)
+	summaryReq.Header.Set("Authorization", "Bearer "+token)
+	summaryResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(summaryResp, summaryReq)
+	if summaryResp.Code != http.StatusOK {
+		t.Fatalf("unexpected summary status: %d", summaryResp.Code)
+	}
+
+	statusReq := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/mobile/admin/suppliers/status?ref=SUP-001",
+		bytes.NewReader([]byte(`{"blocked":true}`)),
+	)
+	statusReq.Header.Set("Authorization", "Bearer "+token)
+	statusReq.Header.Set("Content-Type", "application/json")
+	statusResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusResp, statusReq)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("unexpected status update code: %d", statusResp.Code)
+	}
+
+	itemsReq := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/mobile/admin/suppliers/items?ref=SUP-001",
+		bytes.NewReader([]byte(`{"item_codes":["ITEM-001","ITEM-002"]}`)),
+	)
+	itemsReq.Header.Set("Authorization", "Bearer "+token)
+	itemsReq.Header.Set("Content-Type", "application/json")
+	itemsResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(itemsResp, itemsReq)
+	if itemsResp.Code != http.StatusOK {
+		t.Fatalf("unexpected item update code: %d", itemsResp.Code)
+	}
+
+	phoneReq := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/mobile/admin/suppliers/phone?ref=SUP-001",
+		bytes.NewReader([]byte(`{"phone":"+998909876543"}`)),
+	)
+	phoneReq.Header.Set("Authorization", "Bearer "+token)
+	phoneReq.Header.Set("Content-Type", "application/json")
+	phoneResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(phoneResp, phoneReq)
+	if phoneResp.Code != http.StatusOK {
+		t.Fatalf("unexpected phone update code: %d", phoneResp.Code)
+	}
+
+	codeReq := httptest.NewRequest(http.MethodPost, "/v1/mobile/admin/suppliers/code/regenerate?ref=SUP-001", nil)
+	codeReq.Header.Set("Authorization", "Bearer "+token)
+	codeResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(codeResp, codeReq)
+	if codeResp.Code != http.StatusOK {
+		t.Fatalf("unexpected code regenerate status: %d", codeResp.Code)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/suppliers/detail?ref=SUP-001", nil)
+	detailReq.Header.Set("Authorization", "Bearer "+token)
+	detailResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detailResp, detailReq)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("unexpected detail status: %d", detailResp.Code)
+	}
+
+	var detail AdminSupplierDetail
+	if err := json.NewDecoder(detailResp.Body).Decode(&detail); err != nil {
+		t.Fatalf("failed to decode detail: %v", err)
+	}
+	if !detail.Blocked {
+		t.Fatalf("expected supplier to be blocked: %+v", detail)
+	}
+	if detail.Phone != "+998909876543" {
+		t.Fatalf("expected updated phone, got %+v", detail)
+	}
+	if len(detail.AssignedItems) != 2 {
+		t.Fatalf("expected 2 assigned items, got %+v", detail.AssignedItems)
+	}
+	if detail.Code == "" {
+		t.Fatalf("expected regenerated code, got %+v", detail)
+	}
+
+	createItemReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/admin/items",
+		bytes.NewReader([]byte(`{"code":"ITEM-003","name":"Flour","uom":"Kg"}`)),
+	)
+	createItemReq.Header.Set("Authorization", "Bearer "+token)
+	createItemReq.Header.Set("Content-Type", "application/json")
+	createItemResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(createItemResp, createItemReq)
+	if createItemResp.Code != http.StatusOK {
+		t.Fatalf("unexpected item create status: %d", createItemResp.Code)
+	}
+
+	removeReq := httptest.NewRequest(http.MethodDelete, "/v1/mobile/admin/suppliers/remove?ref=SUP-001", nil)
+	removeReq.Header.Set("Authorization", "Bearer "+token)
+	removeResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(removeResp, removeReq)
+	if removeResp.Code != http.StatusOK {
+		t.Fatalf("unexpected remove status: %d", removeResp.Code)
+	}
+
+	inactiveReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/suppliers/inactive", nil)
+	inactiveReq.Header.Set("Authorization", "Bearer "+token)
+	inactiveResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(inactiveResp, inactiveReq)
+	if inactiveResp.Code != http.StatusOK {
+		t.Fatalf("unexpected inactive list status: %d", inactiveResp.Code)
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/v1/mobile/admin/suppliers/restore?ref=SUP-001", nil)
+	restoreReq.Header.Set("Authorization", "Bearer "+token)
+	restoreResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(restoreResp, restoreReq)
+	if restoreResp.Code != http.StatusOK {
+		t.Fatalf("unexpected restore status: %d", restoreResp.Code)
+	}
+}
+
+func TestServerWerkaHistoryFlow(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		telegramReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|25",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  25,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-10",
+			},
+			{
+				Name:                 "MAT-PRE-0002",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|25",
+				ItemCode:             "ITEM-002",
+				ItemName:             "Oil",
+				Qty:                  25,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-10",
+				Remarks:              "Accord Qabul: 20 Kg\nAccord Qaytarildi: 5 Kg",
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/history", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected werka history status: %d", resp.Code)
+	}
+
+	var items []DispatchRecord
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("failed to decode werka history: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected werka history items")
+	}
+	if len(fakeERP.batchCommentKeys) != 1 {
+		t.Fatalf("expected 1 batch comment call, got %d", len(fakeERP.batchCommentKeys))
+	}
+	if len(fakeERP.batchCommentKeys[0]) != 1 || fakeERP.batchCommentKeys[0][0] != "MAT-PRE-0002" {
+		t.Fatalf("unexpected batch comment names: %+v", fakeERP.batchCommentKeys)
+	}
+}
+
+func TestServerWerkaPendingIncludesDraftReceipts(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		pendingReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|2",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  2,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Status:               "Draft",
+				DocStatus:            0,
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected werka pending status: %d", resp.Code)
+	}
+
+	var items []DispatchRecord
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("failed to decode werka pending: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 pending item, got %+v", items)
+	}
+	if items[0].ID != "MAT-PRE-0001" || items[0].Status != "draft" {
+		t.Fatalf("unexpected pending item payload: %+v", items[0])
+	}
+}
+
+func TestServerWerkaPendingSkipsStaleProcessedDrafts(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		pendingReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000:20260311120000:3.0000",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  3,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Status:               "Draft",
+				DocStatus:            0,
+				Remarks:              "Accord Qabul: 1.0000 Kg\nAccord Qaytarildi: 2.0000 Kg",
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected werka pending status: %d", resp.Code)
+	}
+
+	var items []DispatchRecord
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("failed to decode werka pending: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected stale processed draft to be hidden, got %+v", items)
+	}
+}
+
+func TestServerWerkaSummarySeparatesReturnedFromConfirmed(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		telegramReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|2",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  2,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Status:               "Draft",
+				DocStatus:            0,
+			},
+			{
+				Name:                 "MAT-PRE-0002",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|3",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  3,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				DocStatus:            1,
+			},
+			{
+				Name:                 "MAT-PRE-0003",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000:20260311120000:4.0000",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  1,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Remarks:              "Accord Qabul: 1.0000 Kg\nAccord Qaytarildi: 3.0000 Kg",
+				DocStatus:            1,
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/summary", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected werka summary status: %d", resp.Code)
+	}
+
+	var summary WerkaHomeSummary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("failed to decode werka summary: %v", err)
+	}
+	if summary.PendingCount != 1 || summary.ConfirmedCount != 1 || summary.ReturnedCount != 1 {
+		t.Fatalf("unexpected werka summary: %+v", summary)
+	}
+}
+
+func TestServerWerkaStatusDetailsFiltersBySupplierAndKind(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		telegramReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000:20260311120000:2.0000",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  2,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Status:               "Draft",
+				DocStatus:            0,
+			},
+			{
+				Name:                 "MAT-PRE-0002",
+				Supplier:             "SUP-002",
+				SupplierName:         "Ali",
+				SupplierDeliveryNote: "TG:+998900000001:20260311120000:5.0000",
+				ItemCode:             "ITEM-002",
+				ItemName:             "Oil",
+				Qty:                  5,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-11",
+				Status:               "Draft",
+				DocStatus:            0,
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/status-details?kind=pending&supplier_ref=SUP-001", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected werka status details status: %d", resp.Code)
+	}
+
+	var items []DispatchRecord
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("failed to decode werka status details: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "MAT-PRE-0001" {
+		t.Fatalf("unexpected werka status details: %+v", items)
+	}
+}
+
+func TestServerSupplierHistorySkipsCommentBatchForCleanRecords(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		supplierReceipts: []erpnext.PurchaseReceiptDraft{
+			{
+				Name:                 "MAT-PRE-0001",
+				Supplier:             "SUP-001",
+				SupplierName:         "Abdulloh",
+				SupplierDeliveryNote: "TG:+998900000000|25",
+				ItemCode:             "ITEM-001",
+				ItemName:             "Rice",
+				Qty:                  25,
+				UOM:                  "Kg",
+				PostingDate:          "2026-03-10",
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleSupplier,
+		DisplayName: "Abdulloh",
+		Ref:         "SUP-001",
+	})
+	if err != nil {
+		t.Fatalf("failed to create supplier session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/supplier/history", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected supplier history status: %d", resp.Code)
+	}
+	if len(fakeERP.batchCommentKeys) != 0 {
+		t.Fatalf("expected no batch comment calls, got %+v", fakeERP.batchCommentKeys)
+	}
+	if fakeERP.lastSupplierLimit != 100 {
+		t.Fatalf("expected supplier history limit 100, got %d", fakeERP.lastSupplierLimit)
+	}
+}
+
+func TestServerNotificationDetailAndCommentFlow(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		comments: map[string][]erpnext.Comment{
+			"MAT-PRE-0001": {
+				{ID: "COMM-0001", Content: "Tizim\nQisman olindi.", CreatedAt: "2026-03-11 09:00:00"},
+			},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleSupplier,
+		DisplayName: "Abdulloh",
+		Ref:         "SUP-001",
+	})
+	if err != nil {
+		t.Fatalf("failed to create supplier session: %v", err)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/notifications/detail?receipt_id=MAT-PRE-0001", nil)
+	detailReq.Header.Set("Authorization", "Bearer "+token)
+	detailResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detailResp, detailReq)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("unexpected notification detail status: %d", detailResp.Code)
+	}
+
+	commentReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/notifications/comments?receipt_id=MAT-PRE-0001",
+		bytes.NewReader([]byte(`{"message":"Qaytgan 1 kgni ko‘rdim"}`)),
+	)
+	commentReq.Header.Set("Authorization", "Bearer "+token)
+	commentReq.Header.Set("Content-Type", "application/json")
+	commentResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(commentResp, commentReq)
+	if commentResp.Code != http.StatusOK {
+		t.Fatalf("unexpected notification comment status: %d", commentResp.Code)
+	}
+
+	var detail NotificationDetail
+	if err := json.NewDecoder(commentResp.Body).Decode(&detail); err != nil {
+		t.Fatalf("failed to decode notification detail: %v", err)
+	}
+	if len(detail.Comments) < 2 {
+		t.Fatalf("expected comments to grow, got %+v", detail.Comments)
+	}
+}
+
+func TestServerSupplierAcknowledgmentCommentSucceedsWhenRemarksBackfillFails(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		updateRemarksErr: assertErr("remarks update failed"),
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleSupplier,
+		DisplayName: "Abdulloh",
+		Ref:         "SUP-001",
+	})
+	if err != nil {
+		t.Fatalf("failed to create supplier session: %v", err)
+	}
+
+	commentReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/notifications/comments?receipt_id=MAT-PRE-0001",
+		bytes.NewReader([]byte(`{"message":"Tasdiqlayman, shu holat bo'lganini ko'rdim."}`)),
+	)
+	commentReq.Header.Set("Authorization", "Bearer "+token)
+	commentReq.Header.Set("Content-Type", "application/json")
+	commentResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(commentResp, commentReq)
+	if commentResp.Code != http.StatusOK {
+		t.Fatalf("unexpected supplier acknowledgment status: %d body=%s", commentResp.Code, commentResp.Body.String())
+	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
+
+func TestServerAdminActivity(t *testing.T) {
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleAdmin, DisplayName: "Admin"})
+	if err != nil {
+		t.Fatalf("failed to create admin session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/activity", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", resp.Code)
+	}
+
+	var items []DispatchRecord
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(items) != 1 || items[0].SupplierName != "Abdulloh" {
+		t.Fatalf("unexpected activity payload: %+v", items)
+	}
+}
+
+func TestServerAdminWerkaCodeRegenerate(t *testing.T) {
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleAdmin, DisplayName: "Admin"})
+	if err != nil {
+		t.Fatalf("failed to create admin session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/mobile/admin/werka/code/regenerate", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", resp.Code)
+	}
+
+	var settings AdminSettings
+	if err := json.NewDecoder(resp.Body).Decode(&settings); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !strings.HasPrefix(settings.WerkaCode, "20") {
+		t.Fatalf("unexpected werka code: %q", settings.WerkaCode)
 	}
 }

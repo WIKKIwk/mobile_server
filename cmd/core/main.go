@@ -21,13 +21,14 @@ func main() {
 	if profileStorePath == "" {
 		profileStorePath = "data/mobile_profile_prefs.json"
 	}
+	adminSupplierStorePath := strings.TrimSpace(os.Getenv("MOBILE_API_ADMIN_SUPPLIER_STORE_PATH"))
+	if adminSupplierStorePath == "" {
+		adminSupplierStorePath = "data/mobile_admin_suppliers.json"
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		log.Fatalf("config error: %v", err)
-	}
-	if err := config.EnsureCoreRuntimeConfig(&cfg, ".env", os.Stdin, os.Stdout); err != nil {
-		log.Fatalf("interactive config error: %v", err)
 	}
 
 	erpClient := erpnext.NewClient(&http.Client{Timeout: cfg.RequestTimeout})
@@ -43,12 +44,13 @@ func main() {
 		cfg.WerkaPhone,
 		os.Getenv("MOBILE_DEV_WERKA_NAME"),
 		core.NewProfileStore(profileStorePath),
+		core.NewAdminSupplierStore(adminSupplierStorePath),
 	)
 	service.SetAdminIdentity(
 		"+998880000000",
 		"Admin",
 		"19621978",
-		nil,
+		config.NewDotEnvPersister(".env"),
 	)
 
 	server := mobileapi.NewServer(service)

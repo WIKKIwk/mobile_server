@@ -3,21 +3,29 @@ package mobileapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
 
 type Server struct {
 	auth     *ERPAuthenticator
 	sessions *SessionManager
+	push     *PushTokenStore
+	sender   pushSender
 }
 
 func NewServer(auth *ERPAuthenticator) *Server {
+	pushStore := NewPushTokenStore("data/mobile_push_tokens.json")
 	return &Server{
 		auth:     auth,
 		sessions: NewSessionManager(),
+		push:     pushStore,
+		sender:   newPushSender(pushStore),
 	}
 }
 
@@ -29,16 +37,61 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/me", s.handleMe)
 	mux.HandleFunc("/v1/mobile/profile", s.handleProfile)
 	mux.HandleFunc("/v1/mobile/profile/avatar", s.handleProfileAvatar)
+	mux.HandleFunc("/v1/mobile/profile/avatar/view", s.handleProfileAvatarView)
+	mux.HandleFunc("/v1/mobile/push/token", s.handlePushToken)
+	mux.HandleFunc("/v1/mobile/notifications/detail", s.handleNotificationDetail)
+	mux.HandleFunc("/v1/mobile/notifications/comments", s.handleNotificationComment)
+	mux.HandleFunc("/v1/mobile/supplier/summary", s.handleSupplierSummary)
 	mux.HandleFunc("/v1/mobile/supplier/history", s.handleSupplierHistory)
 	mux.HandleFunc("/v1/mobile/supplier/items", s.handleSupplierItems)
 	mux.HandleFunc("/v1/mobile/supplier/dispatch", s.handleCreateDispatch)
+	mux.HandleFunc("/v1/mobile/werka/summary", s.handleWerkaSummary)
+	mux.HandleFunc("/v1/mobile/werka/status-breakdown", s.handleWerkaStatusBreakdown)
+	mux.HandleFunc("/v1/mobile/werka/status-details", s.handleWerkaStatusDetails)
 	mux.HandleFunc("/v1/mobile/werka/pending", s.handleWerkaPending)
+	mux.HandleFunc("/v1/mobile/werka/history", s.handleWerkaHistory)
 	mux.HandleFunc("/v1/mobile/werka/confirm", s.handleWerkaConfirm)
+	mux.HandleFunc("/v1/mobile/admin/settings", s.handleAdminSettings)
+	mux.HandleFunc("/v1/mobile/admin/suppliers", s.handleAdminSuppliers)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/summary", s.handleAdminSupplierSummary)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/detail", s.handleAdminSupplierDetail)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/inactive", s.handleAdminInactiveSuppliers)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/status", s.handleAdminSupplierStatus)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/phone", s.handleAdminSupplierPhone)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/items", s.handleAdminSupplierItems)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/items/assigned", s.handleAdminSupplierAssignedItems)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/items/add", s.handleAdminSupplierItemAdd)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/items/remove", s.handleAdminSupplierItemRemove)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/code/regenerate", s.handleAdminSupplierCodeRegenerate)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/remove", s.handleAdminSupplierRemove)
+	mux.HandleFunc("/v1/mobile/admin/suppliers/restore", s.handleAdminSupplierRestore)
+	mux.HandleFunc("/v1/mobile/admin/items", s.handleAdminItems)
+	mux.HandleFunc("/v1/mobile/admin/activity", s.handleAdminActivity)
+	mux.HandleFunc("/v1/mobile/admin/werka/code/regenerate", s.handleAdminWerkaCodeRegenerate)
 	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func avatarProxyURL(r *http.Request, principal Principal, token string) string {
+	if principal.Role != RoleSupplier || strings.TrimSpace(principal.Ref) == "" {
+		return principal.AvatarURL
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/v1/mobile/profile/avatar/view?token=%s", scheme, r.Host, url.QueryEscape(strings.TrimSpace(token)))
+}
+
+func withAvatarProxy(r *http.Request, principal Principal, token string) Principal {
+	if strings.TrimSpace(principal.AvatarURL) == "" {
+		return principal
+	}
+	principal.AvatarURL = avatarProxyURL(r, principal, token)
+	return principal
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +128,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token:   token,
-		Profile: principal,
+		Profile: withAvatarProxy(r, principal, token),
 	})
 }
 
@@ -88,7 +141,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		principal = current
 		s.sessions.Update(token, principal)
 	}
-	writeJSON(w, http.StatusOK, principal)
+	writeJSON(w, http.StatusOK, withAvatarProxy(r, principal, token))
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +173,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.sessions.Update(token, current)
-		writeJSON(w, http.StatusOK, current)
+		writeJSON(w, http.StatusOK, withAvatarProxy(r, current, token))
 	case http.MethodPut:
 		var req ProfileUpdateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -133,7 +186,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.sessions.Update(token, current)
-		writeJSON(w, http.StatusOK, current)
+		writeJSON(w, http.StatusOK, withAvatarProxy(r, current, token))
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -182,7 +235,207 @@ func (s *Server) handleProfileAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.sessions.Update(token, current)
-	writeJSON(w, http.StatusOK, current)
+	writeJSON(w, http.StatusOK, withAvatarProxy(r, current, token))
+}
+
+func (s *Server) handleProfileAvatarView(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	var (
+		principal Principal
+		ok        bool
+	)
+	if token != "" {
+		principal, ok = s.sessions.Get(token)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+	} else {
+		principal, ok = s.authorize(w, r)
+		if !ok {
+			return
+		}
+	}
+	if principal.Role != RoleSupplier {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	current, err := s.auth.Profile(r.Context(), principal)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "avatar fetch failed"})
+		return
+	}
+	if strings.TrimSpace(current.AvatarURL) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	contentType, body, err := s.auth.DownloadFile(
+		r.Context(),
+		s.auth.BaseURL(),
+		s.auth.APIKey(),
+		s.auth.APISecret(),
+		current.AvatarURL,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "avatar fetch failed"})
+		return
+	}
+	if strings.TrimSpace(contentType) != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+func (s *Server) handleNotificationDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if principal.Role != RoleSupplier && principal.Role != RoleWerka {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	receiptID := strings.TrimSpace(r.URL.Query().Get("receipt_id"))
+	if receiptID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "receipt_id is required"})
+		return
+	}
+
+	detail, err := s.auth.NotificationDetail(r.Context(), principal, receiptID)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "notification detail failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleNotificationComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if principal.Role != RoleSupplier && principal.Role != RoleWerka {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	receiptID := strings.TrimSpace(r.URL.Query().Get("receipt_id"))
+	if receiptID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "receipt_id is required"})
+		return
+	}
+	var req NotificationCommentCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	detail, err := s.auth.AddNotificationComment(r.Context(), principal, receiptID, req.Message)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "notification comment failed"})
+		return
+	}
+	if principal.Role == RoleSupplier && strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Message)), "tasdiqlayman") {
+		record := detail.Record
+		record.ID = "supplier_ack:" + strings.TrimSpace(record.ID) + ":" + fmt.Sprintf("%d", time.Now().Unix())
+		record.EventType = "supplier_ack"
+		record.Highlight = "Supplier mahsulotni qaytarganingizni tasdiqladi"
+		record.Note = ""
+		if err := s.sender.SendToKey(
+			r.Context(),
+			string(RoleWerka)+":werka",
+			"Supplier tasdiqladi",
+			record.Highlight,
+			dispatchRecordData(record),
+		); err != nil {
+			log.Printf("push send failed for werka acknowledgment event: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handlePushToken(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if principal.Role != RoleSupplier && principal.Role != RoleWerka {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var req PushTokenRegisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if strings.TrimSpace(req.Token) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+			return
+		}
+		if err := s.push.Put(pushTokenKey(principal), req.Token, req.Platform); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token save failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case http.MethodDelete:
+		token := strings.TrimSpace(r.URL.Query().Get("token"))
+		if token == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+			return
+		}
+		if err := s.push.Delete(pushTokenKey(principal), token); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token delete failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func pushTokenKey(principal Principal) string {
+	return string(principal.Role) + ":" + strings.TrimSpace(principal.Ref)
+}
+
+func dispatchRecordData(record DispatchRecord) map[string]string {
+	return map[string]string{
+		"id":            record.ID,
+		"supplier_ref":  record.SupplierRef,
+		"supplier_name": record.SupplierName,
+		"item_code":     record.ItemCode,
+		"item_name":     record.ItemName,
+		"uom":           record.UOM,
+		"sent_qty":      fmt.Sprintf("%.4f", record.SentQty),
+		"accepted_qty":  fmt.Sprintf("%.4f", record.AcceptedQty),
+		"amount":        fmt.Sprintf("%.4f", record.Amount),
+		"currency":      record.Currency,
+		"note":          record.Note,
+		"event_type":    record.EventType,
+		"highlight":     record.Highlight,
+		"status":        string(record.Status),
+		"created_label": record.CreatedLabel,
+	}
 }
 
 func (s *Server) handleSupplierHistory(w http.ResponseWriter, r *http.Request) {
@@ -195,12 +448,30 @@ func (s *Server) handleSupplierHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.auth.SupplierHistory(r.Context(), principal, 20)
+	items, err := s.auth.SupplierHistory(r.Context(), principal, 100)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier history failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleSupplierSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleSupplier); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	summary, err := s.auth.SupplierSummary(r.Context(), principal)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier summary failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func (s *Server) handleSupplierItems(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +519,15 @@ func (s *Server) handleCreateDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "dispatch create failed"})
 		return
 	}
+	if err := s.sender.SendToKey(
+		r.Context(),
+		string(RoleWerka)+":werka",
+		record.SupplierName,
+		fmt.Sprintf("%s • %.0f %s qabul kutmoqda.", record.ItemCode, record.SentQty, record.UOM),
+		dispatchRecordData(record),
+	); err != nil {
+		log.Printf("push send failed for werka dispatch notify: %v", err)
+	}
 	writeJSON(w, http.StatusOK, record)
 }
 
@@ -264,6 +544,81 @@ func (s *Server) handleWerkaPending(w http.ResponseWriter, r *http.Request) {
 	items, err := s.auth.WerkaPending(r.Context(), 20)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pending fetch failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleWerkaSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	summary, err := s.auth.WerkaSummary(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka summary failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleWerkaStatusBreakdown(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	items, err := s.auth.WerkaStatusBreakdown(r.Context(), kind)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka status breakdown failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleWerkaStatusDetails(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	supplierRef := strings.TrimSpace(r.URL.Query().Get("supplier_ref"))
+	items, err := s.auth.WerkaStatusDetails(r.Context(), kind, supplierRef)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka status details failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleWerkaHistory(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	items, err := s.auth.WerkaHistory(r.Context(), 50)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "history fetch failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -289,12 +644,546 @@ func (s *Server) handleWerkaConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := s.auth.ConfirmReceipt(r.Context(), req.ReceiptID, req.AcceptedQty)
+	record, err := s.auth.ConfirmReceipt(
+		r.Context(),
+		req.ReceiptID,
+		req.AcceptedQty,
+		req.ReturnedQty,
+		req.ReturnReason,
+		req.ReturnComment,
+	)
 	if err != nil {
+		log.Printf("werka confirm failed for %s accepted=%.4f returned=%.4f reason=%q comment=%q: %v", req.ReceiptID, req.AcceptedQty, req.ReturnedQty, req.ReturnReason, req.ReturnComment, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "receipt confirm failed"})
 		return
 	}
+	if err := s.sender.SendToKey(
+		r.Context(),
+		string(RoleSupplier)+":"+strings.TrimSpace(record.SupplierName),
+		record.ItemCode,
+		fmt.Sprintf("Status: %s", strings.TrimSpace(record.Status)),
+		dispatchRecordData(record),
+	); err != nil {
+		log.Printf("push send failed for supplier receipt notify (%s): %v", strings.TrimSpace(record.SupplierName), err)
+	}
 	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.auth.AdminSettings())
+	case http.MethodPut:
+		var req AdminSettings
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if err := s.auth.UpdateAdminSettings(req); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "settings update failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.auth.AdminSettings())
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAdminSuppliers(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	items, err := s.auth.AdminSuppliers(r.Context(), 100)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "suppliers fetch failed"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, items)
+		return
+	}
+	if r.Method == http.MethodPost {
+		var req AdminCreateSupplierRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		item, err := s.auth.AdminCreateSupplier(r.Context(), req.Name, req.Phone)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier create failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+		return
+	}
+	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+}
+
+func (s *Server) handleAdminSupplierSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	summary, err := s.auth.AdminSupplierSummary(r.Context(), 300)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier summary failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleAdminSupplierDetail(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	detail, err := s.auth.AdminSupplierDetail(r.Context(), ref)
+	if err != nil {
+		log.Printf("admin supplier detail failed for %s: %v", ref, err)
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier detail failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminInactiveSuppliers(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	items, err := s.auth.AdminInactiveSuppliers(r.Context(), 300)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "inactive suppliers failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleAdminSupplierStatus(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	var req AdminSupplierStatusUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	detail, err := s.auth.AdminSetSupplierBlocked(r.Context(), ref, req.Blocked)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier status failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierPhone(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	var req AdminSupplierPhoneUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	detail, err := s.auth.AdminUpdateSupplierPhone(r.Context(), ref, req.Phone)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier phone update failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierItems(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	var req AdminSupplierItemsUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	detail, err := s.auth.AdminUpdateSupplierItems(r.Context(), ref, req.ItemCodes)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier items update failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierAssignedItems(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	items, err := s.auth.AdminAssignedSupplierItems(r.Context(), ref, 200)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "assigned items fetch failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleAdminSupplierItemAdd(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+	var req AdminSupplierItemMutationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	detail, err := s.auth.AdminAssignSupplierItem(r.Context(), ref, req.ItemCode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier item add failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierItemRemove(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	itemCode := strings.TrimSpace(r.URL.Query().Get("item_code"))
+	if ref == "" || itemCode == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref and item_code are required"})
+		return
+	}
+	detail, err := s.auth.AdminUnassignSupplierItem(r.Context(), ref, itemCode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier item remove failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierCodeRegenerate(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+
+	detail, err := s.auth.AdminRegenerateSupplierCode(r.Context(), ref)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		if errors.Is(err, ErrCodeRegenCooldown) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "code regenerate cooldown"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier code regenerate failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminSupplierRemove(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+
+	if err := s.auth.AdminRemoveSupplier(r.Context(), ref); err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier remove failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleAdminSupplierRestore(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+
+	detail, err := s.auth.AdminRestoreSupplier(r.Context(), ref)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "supplier not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier restore failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminItems(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		items, err := s.auth.AdminSearchItems(r.Context(), query, 30)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "admin items failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		var req AdminCreateItemRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		item, err := s.auth.AdminCreateItem(r.Context(), req.Code, req.Name, req.UOM)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "admin item create failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAdminActivity(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	items, err := s.auth.AdminActivity(r.Context(), 30)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "admin activity failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleAdminWerkaCodeRegenerate(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	settings, err := s.auth.AdminRegenerateWerkaCode()
+	if err != nil {
+		if errors.Is(err, ErrCodeRegenCooldown) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "code regenerate cooldown"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka code regenerate failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (Principal, bool) {

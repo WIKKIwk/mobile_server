@@ -35,6 +35,9 @@ type PurchaseReceiptDraft struct {
 	Qty                  float64
 	UOM                  string
 	Warehouse            string
+	Amount               float64
+	Currency             string
+	Remarks              string
 }
 
 type PurchaseReceiptSubmissionResult struct {
@@ -45,6 +48,13 @@ type PurchaseReceiptSubmissionResult struct {
 	SentQty              float64
 	AcceptedQty          float64
 	SupplierDeliveryNote string
+	Note                 string
+}
+
+type Comment struct {
+	ID        string
+	Content   string
+	CreatedAt string
 }
 
 func (c *Client) SearchSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier, query string, limit int) ([]Item, error) {
@@ -61,35 +71,111 @@ func (c *Client) SearchSupplierItems(ctx context.Context, baseURL, apiKey, apiSe
 		return nil, err
 	}
 
-	searchLimit := limit * 10
-	if searchLimit < 50 {
-		searchLimit = 50
-	}
-	if searchLimit > 100 {
-		searchLimit = 100
-	}
-
-	candidates, err := c.searchItemsByQuery(ctx, normalized, apiKey, apiSecret, query, searchLimit)
+	itemCodes, err := c.fetchSupplierItemCodes(ctx, normalized, apiKey, apiSecret, supplierLink, 500)
 	if err != nil {
 		return nil, err
 	}
+	return c.searchItemsByCodes(ctx, normalized, apiKey, apiSecret, itemCodes, query, limit)
+}
 
-	filtered := make([]Item, 0, limit)
-	for _, item := range candidates {
-		match, err := c.itemHasSupplier(ctx, normalized, apiKey, apiSecret, item.Code, supplierLink)
-		if err != nil {
-			return nil, err
-		}
-		if !match {
+func (c *Client) ListAssignedSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]Item, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	supplierLink, err := c.resolveSupplierLink(ctx, normalized, apiKey, apiSecret, supplier)
+	if err != nil {
+		return nil, err
+	}
+	itemCodes, err := c.fetchSupplierItemCodes(ctx, normalized, apiKey, apiSecret, supplierLink, limit)
+	if err != nil {
+		return nil, err
+	}
+	return c.searchItemsByCodes(ctx, normalized, apiKey, apiSecret, itemCodes, "", limit)
+}
+
+func (c *Client) AssignSupplierToItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, supplier string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	supplierLink, err := c.resolveSupplierLink(ctx, normalized, apiKey, apiSecret, supplier)
+	if err != nil {
+		return err
+	}
+	match, err := c.itemHasSupplier(ctx, normalized, apiKey, apiSecret, itemCode, supplierLink)
+	if err != nil {
+		return err
+	}
+	if match {
+		return nil
+	}
+	endpoint := normalized + "/api/resource/Item%20Supplier"
+	return c.doJSONRequest(ctx, http.MethodPost, endpoint, apiKey, apiSecret, map[string]interface{}{
+		"parent":      strings.TrimSpace(itemCode),
+		"parenttype":  "Item",
+		"parentfield": "supplier_items",
+		"supplier":    supplierLink,
+	}, nil)
+}
+
+func (c *Client) RemoveSupplierFromItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, supplier string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	supplierLink, err := c.resolveSupplierLink(ctx, normalized, apiKey, apiSecret, supplier)
+	if err != nil {
+		return err
+	}
+
+	var payload struct {
+		Data struct {
+			DefaultSupplier string `json:"default_supplier"`
+			SupplierItems   []struct {
+				Name     string `json:"name"`
+				Supplier string `json:"supplier"`
+			} `json:"supplier_items"`
+		} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Item/" + url.PathEscape(strings.TrimSpace(itemCode))
+	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
+		return err
+	}
+
+	for _, row := range payload.Data.SupplierItems {
+		if !strings.EqualFold(strings.TrimSpace(row.Supplier), strings.TrimSpace(supplierLink)) {
 			continue
 		}
-		filtered = append(filtered, item)
-		if len(filtered) >= limit {
-			break
+		if strings.TrimSpace(row.Name) == "" {
+			continue
+		}
+		deleteEndpoint := normalized + "/api/resource/Item%20Supplier/" + url.PathEscape(strings.TrimSpace(row.Name))
+		if err := c.doJSONRequest(ctx, http.MethodDelete, deleteEndpoint, apiKey, apiSecret, nil, nil); err != nil {
+			return err
 		}
 	}
 
-	return filtered, nil
+	if strings.EqualFold(strings.TrimSpace(payload.Data.DefaultSupplier), strings.TrimSpace(supplierLink)) {
+		if err := c.doJSONRequest(ctx, http.MethodPut, endpoint, apiKey, apiSecret, map[string]string{
+			"default_supplier": "",
+		}, nil); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) GetItemsByCodes(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]Item, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	return c.searchItemsByCodes(ctx, normalized, apiKey, apiSecret, itemCodes, "", len(itemCodes))
 }
 
 func (c *Client) CreateDraftPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret string, input CreatePurchaseReceiptInput) (PurchaseReceiptDraft, error) {
@@ -174,70 +260,75 @@ func (c *Client) CreateDraftPurchaseReceipt(ctx context.Context, baseURL, apiKey
 }
 
 func (c *Client) ListPendingPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]PurchaseReceiptDraft, error) {
+	return c.ListPendingPurchaseReceiptsPage(ctx, baseURL, apiKey, apiSecret, limit, 0)
+}
+
+func (c *Client) ListPendingPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret string, limit, offset int) ([]PurchaseReceiptDraft, error) {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 50 {
-		limit = 10
+	if limit <= 0 || limit > 500 {
+		limit = 100
 	}
 
 	filtersJSON, _ := json.Marshal([][]interface{}{
 		{"docstatus", "=", 0},
 	})
-	params := url.Values{}
-	params.Set("fields", `["name"]`)
-	params.Set("filters", string(filtersJSON))
-	params.Set("limit_page_length", fmt.Sprintf("%d", limit))
-	params.Set("order_by", "modified desc")
-
-	var payload struct {
-		Data []struct {
-			Name string `json:"name"`
-		} `json:"data"`
-	}
-	endpoint := normalized + "/api/resource/Purchase Receipt?" + params.Encode()
-	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
-		return nil, err
-	}
-
-	items := make([]PurchaseReceiptDraft, 0, len(payload.Data))
-	for _, row := range payload.Data {
-		if strings.TrimSpace(row.Name) == "" {
-			continue
-		}
-		doc, err := c.GetPurchaseReceipt(ctx, normalized, apiKey, apiSecret, row.Name)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, doc)
-	}
-	return items, nil
+	return c.listPurchaseReceipts(ctx, normalized, apiKey, apiSecret, filtersJSON, limit, offset)
 }
 
 func (c *Client) ListSupplierPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]PurchaseReceiptDraft, error) {
+	return c.ListSupplierPurchaseReceiptsPage(ctx, baseURL, apiKey, apiSecret, supplier, limit, 0)
+}
+
+func (c *Client) ListSupplierPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit, offset int) ([]PurchaseReceiptDraft, error) {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 100 {
-		limit = 20
+	if limit <= 0 || limit > 500 {
+		limit = 100
 	}
 
 	filtersJSON, _ := json.Marshal([][]interface{}{
 		{"supplier", "=", strings.TrimSpace(supplier)},
 		{"supplier_delivery_note", "like", telegramReceiptMarkerPrefix + "%"},
 	})
+	return c.listPurchaseReceipts(ctx, normalized, apiKey, apiSecret, filtersJSON, limit, offset)
+}
+
+func (c *Client) ListTelegramPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]PurchaseReceiptDraft, error) {
+	return c.ListTelegramPurchaseReceiptsPage(ctx, baseURL, apiKey, apiSecret, limit, 0)
+}
+
+func (c *Client) ListTelegramPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret string, limit, offset int) ([]PurchaseReceiptDraft, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	filtersJSON, _ := json.Marshal([][]interface{}{
+		{"supplier_delivery_note", "like", telegramReceiptMarkerPrefix + "%"},
+	})
+	return c.listPurchaseReceipts(ctx, normalized, apiKey, apiSecret, filtersJSON, limit, offset)
+}
+
+func (c *Client) listPurchaseReceipts(ctx context.Context, normalized, apiKey, apiSecret string, filtersJSON []byte, limit, offset int) ([]PurchaseReceiptDraft, error) {
 	params := url.Values{}
-	params.Set("fields", `["name"]`)
+	params.Set("fields", `["name","supplier","supplier_name","posting_date","supplier_delivery_note","status","docstatus","currency","remarks","items"]`)
 	params.Set("filters", string(filtersJSON))
 	params.Set("limit_page_length", fmt.Sprintf("%d", limit))
+	if offset > 0 {
+		params.Set("limit_start", fmt.Sprintf("%d", offset))
+	}
 	params.Set("order_by", "modified desc")
 
 	var payload struct {
-		Data []struct {
-			Name string `json:"name"`
-		} `json:"data"`
+		Data []map[string]interface{} `json:"data"`
 	}
 	endpoint := normalized + "/api/resource/Purchase Receipt?" + params.Encode()
 	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
@@ -246,12 +337,16 @@ func (c *Client) ListSupplierPurchaseReceipts(ctx context.Context, baseURL, apiK
 
 	items := make([]PurchaseReceiptDraft, 0, len(payload.Data))
 	for _, row := range payload.Data {
-		if strings.TrimSpace(row.Name) == "" {
-			continue
-		}
-		doc, err := c.GetPurchaseReceipt(ctx, normalized, apiKey, apiSecret, row.Name)
+		doc, err := mapPurchaseReceiptDraft(row)
 		if err != nil {
-			return nil, err
+			name := strings.TrimSpace(getStringValue(row["name"]))
+			if name == "" {
+				return nil, err
+			}
+			doc, err = c.GetPurchaseReceipt(ctx, normalized, apiKey, apiSecret, name)
+			if err != nil {
+				return nil, err
+			}
 		}
 		items = append(items, doc)
 	}
@@ -272,19 +367,108 @@ func (c *Client) GetPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSec
 	return mapPurchaseReceiptDraft(doc)
 }
 
-func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty float64) (PurchaseReceiptSubmissionResult, error) {
+func (c *Client) ListPurchaseReceiptComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]Comment, error) {
+	itemsByName, err := c.ListPurchaseReceiptCommentsBatch(ctx, baseURL, apiKey, apiSecret, []string{name}, limit)
+	if err != nil {
+		return nil, err
+	}
+	return itemsByName[strings.TrimSpace(name)], nil
+}
+
+func (c *Client) ListPurchaseReceiptCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]Comment, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	normalizedNames := make([]string, 0, len(names))
+	seenNames := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seenNames[trimmed]; ok {
+			continue
+		}
+		seenNames[trimmed] = struct{}{}
+		normalizedNames = append(normalizedNames, trimmed)
+	}
+	if len(normalizedNames) == 0 {
+		return map[string][]Comment{}, nil
+	}
+
+	filtersJSON, _ := json.Marshal([][]interface{}{
+		{"reference_doctype", "=", "Purchase Receipt"},
+		{"reference_name", "in", normalizedNames},
+		{"comment_type", "=", "Comment"},
+	})
+	params := url.Values{}
+	params.Set("fields", `["name","content","creation","reference_name"]`)
+	params.Set("filters", string(filtersJSON))
+	params.Set("order_by", "reference_name asc, creation asc")
+	params.Set("limit_page_length", fmt.Sprintf("%d", len(normalizedNames)*limit))
+
+	var payload struct {
+		Data []struct {
+			Name          string `json:"name"`
+			Content       string `json:"content"`
+			Creation      string `json:"creation"`
+			ReferenceName string `json:"reference_name"`
+		} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Comment?" + params.Encode()
+	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
+		return nil, err
+	}
+
+	itemsByName := make(map[string][]Comment, len(normalizedNames))
+	for _, row := range payload.Data {
+		name := strings.TrimSpace(row.ReferenceName)
+		if name == "" {
+			continue
+		}
+		if len(itemsByName[name]) >= limit {
+			continue
+		}
+		itemsByName[name] = append(itemsByName[name], Comment{
+			ID:        strings.TrimSpace(row.Name),
+			Content:   strings.TrimSpace(row.Content),
+			CreatedAt: strings.TrimSpace(row.Creation),
+		})
+	}
+	for _, name := range normalizedNames {
+		if _, ok := itemsByName[name]; !ok {
+			itemsByName[name] = []Comment{}
+		}
+	}
+	return itemsByName, nil
+}
+
+func (c *Client) AddPurchaseReceiptComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	return c.addComment(ctx, normalized, apiKey, apiSecret, "Purchase Receipt", name, content)
+}
+
+func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty, returnedQty float64, returnReason, returnComment string) (PurchaseReceiptSubmissionResult, error) {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return PurchaseReceiptSubmissionResult{}, err
 	}
-	if acceptedQty <= 0 {
-		return PurchaseReceiptSubmissionResult{}, fmt.Errorf("accepted qty must be greater than 0")
+	if acceptedQty < 0 {
+		return PurchaseReceiptSubmissionResult{}, fmt.Errorf("accepted qty cannot be negative")
 	}
 
 	doc, err := c.fetchPurchaseReceiptDoc(ctx, normalized, apiKey, apiSecret, name)
 	if err != nil {
 		return PurchaseReceiptSubmissionResult{}, err
 	}
+	originalDoc := cloneDocumentMap(doc)
 
 	draft, err := mapPurchaseReceiptDraft(doc)
 	if err != nil {
@@ -292,6 +476,33 @@ func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, a
 	}
 	if acceptedQty > draft.Qty {
 		return PurchaseReceiptSubmissionResult{}, fmt.Errorf("accepted qty cannot exceed sent qty")
+	}
+	decisionNote, err := buildAccordDecisionNote(draft, acceptedQty, returnedQty, returnReason, returnComment)
+	if err != nil {
+		return PurchaseReceiptSubmissionResult{}, err
+	}
+	fullReturn := acceptedQty == 0 && returnedQty >= draft.Qty && draft.Qty > 0
+
+	if fullReturn {
+		if strings.TrimSpace(decisionNote) != "" {
+			updateEndpoint := normalized + "/api/resource/Purchase%20Receipt/" + url.PathEscape(name)
+			if err := c.doJSONRequest(ctx, http.MethodPut, updateEndpoint, apiKey, apiSecret, map[string]string{
+				"remarks": upsertAccordDecisionInRemarks(strings.TrimSpace(draft.Remarks), decisionNote),
+			}, nil); err != nil {
+				return PurchaseReceiptSubmissionResult{}, err
+			}
+			_ = c.addComment(ctx, normalized, apiKey, apiSecret, "Purchase Receipt", name, decisionNote)
+		}
+		return PurchaseReceiptSubmissionResult{
+			Name:                 name,
+			Supplier:             draft.Supplier,
+			ItemCode:             draft.ItemCode,
+			UOM:                  draft.UOM,
+			SentQty:              draft.Qty,
+			AcceptedQty:          0,
+			SupplierDeliveryNote: draft.SupplierDeliveryNote,
+			Note:                 ExtractAccordDecisionNote(decisionNote),
+		}, nil
 	}
 
 	items, ok := doc["items"].([]interface{})
@@ -308,16 +519,33 @@ func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, a
 		conversionFactor = 1
 	}
 	stockQty := acceptedQty * conversionFactor
+	receivedQty := acceptedQty + returnedQty
+	receivedStockQty := receivedQty * conversionFactor
 
 	firstItem["qty"] = acceptedQty
-	firstItem["received_qty"] = acceptedQty
+	firstItem["received_qty"] = receivedQty
 	firstItem["stock_qty"] = stockQty
-	firstItem["received_stock_qty"] = stockQty
-	firstItem["rejected_qty"] = 0
-	firstItem["rejected_warehouse"] = ""
+	firstItem["received_stock_qty"] = receivedStockQty
+	firstItem["rejected_qty"] = returnedQty
+	if returnedQty > 0 {
+		rejectedWarehouse := strings.TrimSpace(getStringValue(firstItem["rejected_warehouse"]))
+		acceptedWarehouse := strings.TrimSpace(getStringValue(firstItem["warehouse"]))
+		if rejectedWarehouse == "" || strings.EqualFold(rejectedWarehouse, acceptedWarehouse) {
+			rejectedWarehouse, err = c.findAlternateWarehouse(ctx, normalized, apiKey, apiSecret, acceptedWarehouse)
+			if err != nil {
+				return PurchaseReceiptSubmissionResult{}, err
+			}
+		}
+		firstItem["rejected_warehouse"] = rejectedWarehouse
+	} else {
+		firstItem["rejected_warehouse"] = ""
+	}
 	firstItem["allow_zero_valuation_rate"] = 1
 	if _, ok := firstItem["rate"]; !ok {
 		firstItem["rate"] = 0
+	}
+	if strings.TrimSpace(decisionNote) != "" {
+		doc["remarks"] = upsertAccordDecisionInRemarks(getStringValue(doc["remarks"]), decisionNote)
 	}
 
 	updateEndpoint := normalized + "/api/resource/Purchase%20Receipt/" + url.PathEscape(name)
@@ -326,7 +554,13 @@ func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, a
 	}
 
 	if err := c.submitDoc(ctx, normalized, apiKey, apiSecret, "Purchase Receipt", name); err != nil {
+		if rollbackErr := c.doJSONRequest(ctx, http.MethodPut, updateEndpoint, apiKey, apiSecret, originalDoc, nil); rollbackErr != nil {
+			return PurchaseReceiptSubmissionResult{}, fmt.Errorf("submit failed: %v; rollback failed: %v", err, rollbackErr)
+		}
 		return PurchaseReceiptSubmissionResult{}, err
+	}
+	if strings.TrimSpace(decisionNote) != "" {
+		_ = c.addComment(ctx, normalized, apiKey, apiSecret, "Purchase Receipt", name, decisionNote)
 	}
 
 	return PurchaseReceiptSubmissionResult{
@@ -337,7 +571,33 @@ func (c *Client) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, a
 		SentQty:              draft.Qty,
 		AcceptedQty:          acceptedQty,
 		SupplierDeliveryNote: draft.SupplierDeliveryNote,
+		Note:                 ExtractAccordDecisionNote(decisionNote),
 	}, nil
+}
+
+func cloneDocumentMap(input map[string]interface{}) map[string]interface{} {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return input
+	}
+	var cloned map[string]interface{}
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return input
+	}
+	return cloned
+}
+
+func (c *Client) addComment(ctx context.Context, normalized, apiKey, apiSecret, doctype, name, content string) error {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	endpoint := normalized + "/api/resource/Comment"
+	return c.doJSONRequest(ctx, http.MethodPost, endpoint, apiKey, apiSecret, map[string]string{
+		"comment_type":      "Comment",
+		"reference_doctype": strings.TrimSpace(doctype),
+		"reference_name":    strings.TrimSpace(name),
+		"content":           strings.TrimSpace(content),
+	}, nil)
 }
 
 func (c *Client) resolveSupplierLink(ctx context.Context, normalized, apiKey, apiSecret, supplier string) (string, error) {
@@ -370,6 +630,7 @@ func (c *Client) fetchSupplierItemCodes(ctx context.Context, normalized, apiKey,
 		{"supplier", "=", supplier},
 	})
 	params := url.Values{}
+	params.Set("parent", "Item")
 	params.Set("fields", `["parent"]`)
 	params.Set("filters", string(filtersJSON))
 	params.Set("limit_page_length", fmt.Sprintf("%d", limit))
@@ -430,12 +691,15 @@ func (c *Client) searchItemsByCodes(ctx context.Context, normalized, apiKey, api
 	if len(itemCodes) == 0 {
 		return []Item{}, nil
 	}
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 {
 		limit = 20
 	}
+	if limit > 200 {
+		limit = 200
+	}
 
-	if len(itemCodes) > 200 {
-		itemCodes = itemCodes[:200]
+	if len(itemCodes) > 500 {
+		itemCodes = itemCodes[:500]
 	}
 
 	filtersJSON, _ := json.Marshal([][]interface{}{
@@ -499,6 +763,35 @@ func (c *Client) fetchWarehouseCompany(ctx context.Context, normalized, apiKey, 
 		return "", fmt.Errorf("company not found for warehouse %s", warehouse)
 	}
 	return payload.Data.Company, nil
+}
+
+func (c *Client) findAlternateWarehouse(ctx context.Context, normalized, apiKey, apiSecret, acceptedWarehouse string) (string, error) {
+	params := url.Values{}
+	params.Set("fields", `["name","is_group"]`)
+	params.Set("limit_page_length", "50")
+
+	var payload struct {
+		Data []struct {
+			Name    string `json:"name"`
+			IsGroup int    `json:"is_group"`
+		} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Warehouse?" + params.Encode()
+	err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range payload.Data {
+		name := strings.TrimSpace(item.Name)
+		if item.IsGroup != 0 {
+			continue
+		}
+		if name == "" || strings.EqualFold(name, strings.TrimSpace(acceptedWarehouse)) {
+			continue
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("rejected warehouse topilmadi: %s", acceptedWarehouse)
 }
 
 func (c *Client) fetchPurchaseReceiptDoc(ctx context.Context, normalized, apiKey, apiSecret, name string) (map[string]interface{}, error) {
@@ -579,7 +872,145 @@ func mapPurchaseReceiptDraft(doc map[string]interface{}) (PurchaseReceiptDraft, 
 		Qty:                  getFloatValue(firstItem["qty"]),
 		UOM:                  uom,
 		Warehouse:            getStringValue(firstItem["warehouse"]),
+		Amount:               getFloatValue(firstItem["amount"]),
+		Currency:             getStringValue(doc["currency"]),
+		Remarks:              getStringValue(doc["remarks"]),
 	}, nil
+}
+
+const (
+	accordAcceptedLinePrefix = "Accord Qabul:"
+	accordReturnedLinePrefix = "Accord Qaytarildi:"
+	accordReasonLinePrefix   = "Accord Sabab:"
+	accordCommentLinePrefix  = "Accord Izoh:"
+	accordSupplierAckPrefix  = "Accord Supplier Tasdiq:"
+)
+
+func buildAccordDecisionNote(draft PurchaseReceiptDraft, acceptedQty, returnedQty float64, returnReason, returnComment string) (string, error) {
+	impliedReturnedQty := draft.Qty - acceptedQty
+	if impliedReturnedQty < 0 {
+		impliedReturnedQty = 0
+	}
+	trimmedComment := strings.TrimSpace(returnComment)
+	if impliedReturnedQty <= 0 {
+		return "", nil
+	}
+
+	if returnedQty < 0 {
+		return "", fmt.Errorf("returned qty cannot be negative")
+	}
+	if returnedQty == 0 {
+		returnedQty = impliedReturnedQty
+	}
+	if returnedQty-impliedReturnedQty > 0.0001 {
+		return "", fmt.Errorf("returned qty cannot exceed sent minus accepted qty")
+	}
+
+	lines := []string{
+		fmt.Sprintf("%s %.4f %s", accordAcceptedLinePrefix, acceptedQty, draft.UOM),
+		fmt.Sprintf("%s %.4f %s", accordReturnedLinePrefix, returnedQty, draft.UOM),
+	}
+	if strings.TrimSpace(returnReason) != "" {
+		lines = append(lines, accordReasonLinePrefix+" "+strings.TrimSpace(returnReason))
+	}
+	if trimmedComment != "" {
+		lines = append(lines, accordCommentLinePrefix+" "+trimmedComment)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func upsertAccordDecisionInRemarks(existing, decision string) string {
+	lines := strings.Split(strings.ReplaceAll(existing, "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines)+3)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, accordAcceptedLinePrefix) ||
+			strings.HasPrefix(trimmed, accordReturnedLinePrefix) ||
+			strings.HasPrefix(trimmed, accordReasonLinePrefix) ||
+			strings.HasPrefix(trimmed, accordCommentLinePrefix) ||
+			strings.HasPrefix(trimmed, accordSupplierAckPrefix) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	if strings.TrimSpace(decision) != "" {
+		filtered = append(filtered, strings.Split(strings.TrimSpace(decision), "\n")...)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func ExtractAccordDecisionNote(remarks string) string {
+	lines := strings.Split(strings.ReplaceAll(remarks, "\r\n", "\n"), "\n")
+	result := make([]string, 0, 3)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, accordAcceptedLinePrefix):
+			result = append(result, "Qabul: "+strings.TrimSpace(strings.TrimPrefix(trimmed, accordAcceptedLinePrefix)))
+		case strings.HasPrefix(trimmed, accordReturnedLinePrefix):
+			result = append(result, "Qaytarildi: "+strings.TrimSpace(strings.TrimPrefix(trimmed, accordReturnedLinePrefix)))
+		case strings.HasPrefix(trimmed, accordReasonLinePrefix):
+			result = append(result, "Sabab: "+strings.TrimSpace(strings.TrimPrefix(trimmed, accordReasonLinePrefix)))
+		case strings.HasPrefix(trimmed, accordCommentLinePrefix):
+			result = append(result, "Izoh: "+strings.TrimSpace(strings.TrimPrefix(trimmed, accordCommentLinePrefix)))
+		case strings.HasPrefix(trimmed, accordSupplierAckPrefix):
+			result = append(result, "Supplier tasdiqladi: "+strings.TrimSpace(strings.TrimPrefix(trimmed, accordSupplierAckPrefix)))
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func ExtractAccordDecisionQuantities(remarks string) (acceptedQty, returnedQty float64) {
+	lines := strings.Split(strings.ReplaceAll(remarks, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, accordAcceptedLinePrefix):
+			value := strings.TrimSpace(strings.TrimPrefix(trimmed, accordAcceptedLinePrefix))
+			fields := strings.Fields(value)
+			if len(fields) > 0 {
+				acceptedQty, _ = strconv.ParseFloat(fields[0], 64)
+			}
+		case strings.HasPrefix(trimmed, accordReturnedLinePrefix):
+			value := strings.TrimSpace(strings.TrimPrefix(trimmed, accordReturnedLinePrefix))
+			fields := strings.Fields(value)
+			if len(fields) > 0 {
+				returnedQty, _ = strconv.ParseFloat(fields[0], 64)
+			}
+		}
+	}
+	return acceptedQty, returnedQty
+}
+
+func UpsertSupplierAcknowledgmentInRemarks(existingNote, message string) string {
+	lines := strings.Split(strings.ReplaceAll(existingNote, "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Supplier tasdiqladi:") {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	filtered = append(filtered, accordSupplierAckPrefix+" "+strings.TrimSpace(message))
+	return strings.Join(filtered, "\n")
+}
+
+func (c *Client) UpdatePurchaseReceiptRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	endpoint := normalized + "/api/resource/Purchase%20Receipt/" + url.PathEscape(strings.TrimSpace(name))
+	return c.doJSONRequest(ctx, http.MethodPut, endpoint, apiKey, apiSecret, map[string]string{
+		"remarks": strings.TrimSpace(remarks),
+	}, nil)
 }
 
 func buildTelegramReceiptMarker(phone string, qty float64, now time.Time) string {
