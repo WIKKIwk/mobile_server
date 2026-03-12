@@ -2,3 +2,4 @@
 .core.log
 .core.pid
 data/
+*firebase-adminsdk*.json
