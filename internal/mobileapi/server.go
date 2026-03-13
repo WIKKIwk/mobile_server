@@ -775,7 +775,7 @@ func (s *Server) handleWerkaUnannouncedCreate(w http.ResponseWriter, r *http.Req
 	}
 	if err := s.sender.SendToKey(
 		r.Context(),
-		string(RoleSupplier)+":"+strings.TrimSpace(record.SupplierName),
+		string(RoleSupplier)+":"+strings.TrimSpace(record.SupplierRef),
 		"Werka siz qayd etmagan mahsulotni qabul qildi",
 		"Tasdiqlash kutilmoqda",
 		dispatchRecordData(record),
@@ -877,7 +877,7 @@ func (s *Server) handleWerkaConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.sender.SendToKey(
 		r.Context(),
-		string(RoleSupplier)+":"+strings.TrimSpace(record.SupplierName),
+		string(RoleSupplier)+":"+strings.TrimSpace(record.SupplierRef),
 		record.ItemCode,
 		fmt.Sprintf("Status: %s", strings.TrimSpace(record.Status)),
 		dispatchRecordData(record),
