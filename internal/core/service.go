@@ -581,6 +581,9 @@ func (a *ERPAuthenticator) WerkaHistory(ctx context.Context, limit int) ([]Dispa
 	result := make([]DispatchRecord, 0, len(items))
 	for _, item := range items {
 		record := mapPurchaseReceiptToDispatchRecord(item, item.SupplierName)
+		if record.EventType == "werka_unannounced_pending" {
+			continue
+		}
 		result = append(result, record)
 
 		for _, comment := range commentsByReceipt[item.Name] {
