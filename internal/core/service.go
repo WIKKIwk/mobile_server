@@ -38,6 +38,7 @@ type ERPClient interface {
 	GetItemsByCodes(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error)
 	CreateItem(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateItemInput) (erpnext.Item, error)
 	EnsureSupplier(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateSupplierInput) (erpnext.Supplier, error)
+	SearchCompanies(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error)
 	SearchWarehouses(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error)
 	SearchSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier, query string, limit int) ([]erpnext.Item, error)
 	ListAssignedSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error)
@@ -57,6 +58,7 @@ type ERPClient interface {
 	UpdatePurchaseReceiptRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error
 	CreateDraftPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreatePurchaseReceiptInput) (erpnext.PurchaseReceiptDraft, error)
 	CreateAndSubmitStockEntry(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateStockEntryInput) (erpnext.StockEntryResult, error)
+	CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error)
 	ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty, returnedQty float64, returnReason, returnComment string) (erpnext.PurchaseReceiptSubmissionResult, error)
 	UploadSupplierImage(ctx context.Context, baseURL, apiKey, apiSecret, supplierID, filename, contentType string, content []byte) (string, error)
 	DownloadFile(ctx context.Context, baseURL, apiKey, apiSecret, fileURL string) (string, []byte, error)
@@ -81,6 +83,8 @@ type ERPAuthenticator struct {
 	envPersister      EnvPersister
 	warehouseMu       sync.RWMutex
 	resolvedWarehouse string
+	companyMu         sync.RWMutex
+	resolvedCompany   string
 }
 
 func (a *ERPAuthenticator) BaseURL() string {
@@ -923,14 +927,17 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
-	remarks := strings.TrimSpace("Accord Customer: " + customer.ID + "\nAccord Customer Name: " + customer.Name)
-	result, err := a.erp.CreateAndSubmitStockEntry(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateStockEntryInput{
-		EntryType:       "Material Issue",
-		ItemCode:        strings.TrimSpace(itemCode),
-		Qty:             qty,
-		UOM:             item.UOM,
-		SourceWarehouse: warehouse,
-		Remarks:         remarks,
+	company, err := a.resolveCompany(ctx)
+	if err != nil {
+		return WerkaCustomerIssueRecord{}, err
+	}
+	result, err := a.erp.CreateAndSubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateDeliveryNoteInput{
+		Customer:  customer.ID,
+		Company:   company,
+		Warehouse: warehouse,
+		ItemCode:  strings.TrimSpace(itemCode),
+		Qty:       qty,
+		UOM:       item.UOM,
 	})
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
@@ -1101,6 +1108,22 @@ func (a *ERPAuthenticator) resolveWarehouse(ctx context.Context) (string, error)
 	return warehouse, nil
 }
 
+func (a *ERPAuthenticator) resolveCompany(ctx context.Context) (string, error) {
+	if cached := a.cachedCompany(); cached != "" {
+		return cached, nil
+	}
+	items, err := a.erp.SearchCompanies(ctx, a.baseURL, a.apiKey, a.apiSecret, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 || strings.TrimSpace(items[0].Name) == "" {
+		return "", fmt.Errorf("company is not configured")
+	}
+	company := strings.TrimSpace(items[0].Name)
+	a.setCachedCompany(company)
+	return company, nil
+}
+
 func (a *ERPAuthenticator) ConfirmReceipt(ctx context.Context, receiptID string, acceptedQty, returnedQty float64, returnReason, returnComment string) (DispatchRecord, error) {
 	result, err := a.erp.ConfirmAndSubmitPurchaseReceipt(
 		ctx,
@@ -1223,6 +1246,18 @@ func (a *ERPAuthenticator) setCachedWarehouse(warehouse string) {
 	a.warehouseMu.Lock()
 	defer a.warehouseMu.Unlock()
 	a.resolvedWarehouse = strings.TrimSpace(warehouse)
+}
+
+func (a *ERPAuthenticator) cachedCompany() string {
+	a.companyMu.RLock()
+	defer a.companyMu.RUnlock()
+	return strings.TrimSpace(a.resolvedCompany)
+}
+
+func (a *ERPAuthenticator) setCachedCompany(company string) {
+	a.companyMu.Lock()
+	defer a.companyMu.Unlock()
+	a.resolvedCompany = strings.TrimSpace(company)
 }
 
 type SessionManager struct {

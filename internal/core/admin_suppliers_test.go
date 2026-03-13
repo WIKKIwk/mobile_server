@@ -26,6 +26,10 @@ func (s *adminSuppliersERPStub) SearchCustomers(ctx context.Context, baseURL, ap
 	return nil, nil
 }
 
+func (s *adminSuppliersERPStub) SearchCompanies(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error) {
+	return nil, nil
+}
+
 func (s *adminSuppliersERPStub) GetCustomer(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error) {
 	return erpnext.Customer{}, nil
 }
@@ -154,6 +158,10 @@ func (s *adminSuppliersERPStub) CreateDraftPurchaseReceipt(ctx context.Context, 
 
 func (s *adminSuppliersERPStub) CreateAndSubmitStockEntry(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateStockEntryInput) (erpnext.StockEntryResult, error) {
 	return erpnext.StockEntryResult{}, nil
+}
+
+func (s *adminSuppliersERPStub) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+	return erpnext.DeliveryNoteResult{}, nil
 }
 
 func (s *adminSuppliersERPStub) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty, returnedQty float64, returnReason, returnComment string) (erpnext.PurchaseReceiptSubmissionResult, error) {

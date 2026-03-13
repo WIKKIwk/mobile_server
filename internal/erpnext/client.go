@@ -34,6 +34,10 @@ type Warehouse struct {
 	Name string
 }
 
+type Company struct {
+	Name string
+}
+
 type UOM struct {
 	Name string
 }
@@ -63,6 +67,19 @@ type CreateStockEntryInput struct {
 }
 
 type StockEntryResult struct {
+	Name string
+}
+
+type CreateDeliveryNoteInput struct {
+	Customer  string
+	Company   string
+	Warehouse string
+	ItemCode  string
+	Qty       float64
+	UOM       string
+}
+
+type DeliveryNoteResult struct {
 	Name string
 }
 

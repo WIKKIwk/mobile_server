@@ -58,6 +58,10 @@ func (f *fakeERPClient) SearchCustomers(_ context.Context, _, _, _, query string
 	return result, nil
 }
 
+func (f *fakeERPClient) SearchCompanies(_ context.Context, _, _, _ string, _ int) ([]erpnext.Company, error) {
+	return []erpnext.Company{{Name: "accord"}}, nil
+}
+
 func (f *fakeERPClient) GetCustomer(_ context.Context, _, _, _, id string) (erpnext.Customer, error) {
 	for _, item := range f.customers {
 		if item.ID == id {
@@ -282,6 +286,10 @@ func (f *fakeERPClient) CreateDraftPurchaseReceipt(_ context.Context, _, _, _ st
 func (f *fakeERPClient) CreateAndSubmitStockEntry(_ context.Context, _, _, _ string, input erpnext.CreateStockEntryInput) (erpnext.StockEntryResult, error) {
 	f.lastStockEntry = input
 	return erpnext.StockEntryResult{Name: "STE-0001"}, nil
+}
+
+func (f *fakeERPClient) CreateAndSubmitDeliveryNote(_ context.Context, _, _, _ string, _ erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+	return erpnext.DeliveryNoteResult{Name: "MAT-DN-0001"}, nil
 }
 
 func (f *fakeERPClient) ConfirmAndSubmitPurchaseReceipt(_ context.Context, _, _, _, _ string, _, _ float64, _, _ string) (erpnext.PurchaseReceiptSubmissionResult, error) {
