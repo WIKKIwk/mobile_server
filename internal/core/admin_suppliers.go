@@ -424,6 +424,22 @@ func (a *ERPAuthenticator) AdminCreateCustomer(ctx context.Context, name, phone 
 	}, nil
 }
 
+func (a *ERPAuthenticator) AdminCustomers(ctx context.Context, limit int) ([]CustomerDirectoryEntry, error) {
+	items, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, "", limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]CustomerDirectoryEntry, 0, len(items))
+	for _, item := range items {
+		result = append(result, CustomerDirectoryEntry{
+			Ref:   item.ID,
+			Name:  item.Name,
+			Phone: item.Phone,
+		})
+	}
+	return result, nil
+}
+
 func (a *ERPAuthenticator) supplierAllowedItems(ctx context.Context, principal Principal, query string, limit int) ([]SupplierItem, error) {
 	state, err := a.adminSupplierState(principal.Ref)
 	if err != nil {

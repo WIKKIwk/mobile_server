@@ -968,6 +968,15 @@ func (s *Server) handleAdminCustomers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
+	if r.Method == http.MethodGet {
+		items, err := s.auth.AdminCustomers(r.Context(), 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customers fetch failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
