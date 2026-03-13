@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/confirm", s.handleWerkaConfirm)
 	mux.HandleFunc("/v1/mobile/admin/settings", s.handleAdminSettings)
 	mux.HandleFunc("/v1/mobile/admin/suppliers", s.handleAdminSuppliers)
+	mux.HandleFunc("/v1/mobile/admin/customers", s.handleAdminCustomers)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/summary", s.handleAdminSupplierSummary)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/detail", s.handleAdminSupplierDetail)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/inactive", s.handleAdminInactiveSuppliers)
@@ -956,6 +957,33 @@ func (s *Server) handleAdminSuppliers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+}
+
+func (s *Server) handleAdminCustomers(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req AdminCreateCustomerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	item, err := s.auth.AdminCreateCustomer(r.Context(), req.Name, req.Phone)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer create failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleAdminSupplierSummary(w http.ResponseWriter, r *http.Request) {

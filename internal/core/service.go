@@ -31,6 +31,7 @@ type ERPClient interface {
 	SearchItems(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Item, error)
 	SearchCustomers(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Customer, error)
 	GetCustomer(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error)
+	EnsureCustomer(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateCustomerInput) (erpnext.Customer, error)
 	SearchSuppliers(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Supplier, error)
 	GetSupplier(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Supplier, error)
 	UpdateSupplierDetails(ctx context.Context, baseURL, apiKey, apiSecret, id, details string) error

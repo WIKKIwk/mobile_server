@@ -3,6 +3,8 @@ package erpnext
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -94,6 +96,53 @@ func (c *Client) GetCustomer(ctx context.Context, baseURL, apiKey, apiSecret, id
 		ID:    strings.TrimSpace(payload.Data.Name),
 		Name:  name,
 		Phone: strings.TrimSpace(payload.Data.MobileNo),
+	}, nil
+}
+
+func (c *Client) EnsureCustomer(ctx context.Context, baseURL, apiKey, apiSecret string, input CreateCustomerInput) (Customer, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return Customer{}, err
+	}
+
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Customer{}, fmt.Errorf("customer name is required")
+	}
+	phone := strings.TrimSpace(input.Phone)
+
+	existing, err := c.SearchCustomers(ctx, normalized, apiKey, apiSecret, name, 20)
+	if err != nil {
+		return Customer{}, err
+	}
+	for _, item := range existing {
+		if strings.EqualFold(strings.TrimSpace(item.Name), name) {
+			return Customer{}, fmt.Errorf("ERPNext'da shu nomdagi customer allaqachon mavjud")
+		}
+	}
+
+	payload := map[string]interface{}{
+		"customer_name": name,
+		"customer_type": "Company",
+		"mobile_no":     phone,
+	}
+
+	var response struct {
+		Data struct {
+			Name         string `json:"name"`
+			CustomerName string `json:"customer_name"`
+			MobileNo     string `json:"mobile_no"`
+		} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Customer"
+	if err := c.doJSONRequest(ctx, http.MethodPost, endpoint, apiKey, apiSecret, payload, &response); err != nil {
+		return Customer{}, err
+	}
+
+	return Customer{
+		ID:    strings.TrimSpace(response.Data.Name),
+		Name:  strings.TrimSpace(response.Data.CustomerName),
+		Phone: strings.TrimSpace(response.Data.MobileNo),
 	}, nil
 }
 

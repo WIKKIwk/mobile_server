@@ -36,6 +36,7 @@ type ProfileUpdateRequest = core.ProfileUpdateRequest
 type AdminSettings = core.AdminSettings
 type AdminSupplier = core.AdminSupplier
 type AdminCreateSupplierRequest = core.AdminCreateSupplierRequest
+type AdminCreateCustomerRequest = core.AdminCreateCustomerRequest
 type AdminSupplierSummary = core.AdminSupplierSummary
 type AdminSupplierDetail = core.AdminSupplierDetail
 type AdminSupplierStatusUpdateRequest = core.AdminSupplierStatusUpdateRequest

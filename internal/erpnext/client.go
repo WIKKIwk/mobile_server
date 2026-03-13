@@ -56,6 +56,11 @@ type Customer struct {
 	Phone string
 }
 
+type CreateCustomerInput struct {
+	Name  string
+	Phone string
+}
+
 type CreateStockEntryInput struct {
 	EntryType       string
 	ItemCode        string

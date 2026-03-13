@@ -200,6 +200,11 @@ type AdminCreateSupplierRequest struct {
 	Phone string `json:"phone"`
 }
 
+type AdminCreateCustomerRequest struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+}
+
 type AdminSupplierSummary struct {
 	TotalSuppliers   int `json:"total_suppliers"`
 	ActiveSuppliers  int `json:"active_suppliers"`

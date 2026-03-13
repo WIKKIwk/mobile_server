@@ -409,6 +409,21 @@ func (a *ERPAuthenticator) AdminCreateSupplier(ctx context.Context, name, phone 
 	return a.buildAdminSupplier(item, state)
 }
 
+func (a *ERPAuthenticator) AdminCreateCustomer(ctx context.Context, name, phone string) (CustomerDirectoryEntry, error) {
+	item, err := a.erp.EnsureCustomer(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateCustomerInput{
+		Name:  strings.TrimSpace(name),
+		Phone: strings.TrimSpace(phone),
+	})
+	if err != nil {
+		return CustomerDirectoryEntry{}, err
+	}
+	return CustomerDirectoryEntry{
+		Ref:   item.ID,
+		Name:  item.Name,
+		Phone: item.Phone,
+	}, nil
+}
+
 func (a *ERPAuthenticator) supplierAllowedItems(ctx context.Context, principal Principal, query string, limit int) ([]SupplierItem, error) {
 	state, err := a.adminSupplierState(principal.Ref)
 	if err != nil {

@@ -71,6 +71,14 @@ func (f *fakeERPClient) GetCustomer(_ context.Context, _, _, _, id string) (erpn
 	return erpnext.Customer{}, nil
 }
 
+func (f *fakeERPClient) EnsureCustomer(_ context.Context, _, _, _ string, input erpnext.CreateCustomerInput) (erpnext.Customer, error) {
+	return erpnext.Customer{
+		ID:    input.Name,
+		Name:  input.Name,
+		Phone: input.Phone,
+	}, nil
+}
+
 func (f *fakeERPClient) SearchSuppliers(_ context.Context, _, _, _, _ string, _ int) ([]erpnext.Supplier, error) {
 	return f.suppliers, nil
 }
