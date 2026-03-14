@@ -885,6 +885,30 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer issue create failed"})
 		return
 	}
+	if err := s.sender.SendToKey(
+		r.Context(),
+		string(RoleCustomer)+":"+strings.TrimSpace(record.CustomerRef),
+		"Werka mahsulot jo'natdi",
+		fmt.Sprintf("%s %.0f %s jo'natildi", strings.TrimSpace(record.ItemCode), record.Qty, strings.TrimSpace(record.UOM)),
+		dispatchRecordDataForTarget(
+			DispatchRecord{
+				ID:           record.EntryID,
+				SupplierRef:  record.CustomerRef,
+				SupplierName: record.CustomerName,
+				ItemCode:     record.ItemCode,
+				ItemName:     record.ItemName,
+				UOM:          record.UOM,
+				SentQty:      record.Qty,
+				AcceptedQty:  0,
+				Status:       "pending",
+				CreatedLabel: record.CreatedLabel,
+			},
+			RoleCustomer,
+			record.CustomerRef,
+		),
+	); err != nil {
+		log.Printf("push send failed for customer delivery note: %v", err)
+	}
 	writeJSON(w, http.StatusOK, record)
 }
 
