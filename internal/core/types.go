@@ -89,6 +89,12 @@ type CustomerHomeSummary struct {
 	RejectedCount  int `json:"rejected_count"`
 }
 
+type CustomerDeliveryDetail struct {
+	Record     DispatchRecord `json:"record"`
+	CanApprove bool           `json:"can_approve"`
+	CanReject  bool           `json:"can_reject"`
+}
+
 type SupplierHomeSummary struct {
 	PendingCount   int `json:"pending_count"`
 	SubmittedCount int `json:"submitted_count"`
@@ -161,6 +167,12 @@ type SupplierUnannouncedResponseRequest struct {
 	ReceiptID string `json:"receipt_id"`
 	Approve   bool   `json:"approve"`
 	Reason    string `json:"reason"`
+}
+
+type CustomerDeliveryResponseRequest struct {
+	DeliveryNoteID string `json:"delivery_note_id"`
+	Approve        bool   `json:"approve"`
+	Reason         string `json:"reason"`
 }
 
 type NotificationCommentCreateRequest struct {

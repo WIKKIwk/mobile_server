@@ -83,6 +83,7 @@ type CreateDeliveryNoteInput struct {
 	ItemCode  string
 	Qty       float64
 	UOM       string
+	Remarks   string
 }
 
 type DeliveryNoteResult struct {
@@ -100,6 +101,7 @@ type DeliveryNoteDraft struct {
 	PostingDate  string
 	Status       string
 	DocStatus    int
+	Remarks      string
 }
 
 type Client struct {

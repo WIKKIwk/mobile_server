@@ -113,6 +113,18 @@ func (s *adminSuppliersERPStub) ListCustomerDeliveryNotesPage(ctx context.Contex
 	return nil, nil
 }
 
+func (s *adminSuppliersERPStub) GetDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error) {
+	return erpnext.DeliveryNoteDraft{}, nil
+}
+
+func (s *adminSuppliersERPStub) ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error) {
+	return nil, nil
+}
+
+func (s *adminSuppliersERPStub) ListDeliveryNoteCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]erpnext.Comment, error) {
+	return map[string][]erpnext.Comment{}, nil
+}
+
 func (s *adminSuppliersERPStub) ListAssignedSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error) {
 	if s.listAssignedSupplierItems != nil {
 		return s.listAssignedSupplierItems(ctx, baseURL, apiKey, apiSecret, supplier, limit)
@@ -186,6 +198,22 @@ func (s *adminSuppliersERPStub) CreateAndSubmitStockEntry(ctx context.Context, b
 
 func (s *adminSuppliersERPStub) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
 	return erpnext.DeliveryNoteResult{}, nil
+}
+
+func (s *adminSuppliersERPStub) CreateDraftDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+	return erpnext.DeliveryNoteResult{}, nil
+}
+
+func (s *adminSuppliersERPStub) SubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+	return nil
+}
+
+func (s *adminSuppliersERPStub) UpdateDeliveryNoteRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error {
+	return nil
+}
+
+func (s *adminSuppliersERPStub) AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+	return nil
 }
 
 func (s *adminSuppliersERPStub) ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty, returnedQty float64, returnReason, returnComment string) (erpnext.PurchaseReceiptSubmissionResult, error) {

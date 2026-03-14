@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	accordCustomerDecisionPrefix       = "Accord Customer Holat:"
+	accordCustomerDecisionReasonPrefix = "Accord Customer Sabab:"
+)
+
 func (c *Client) SearchCompanies(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]Company, error) {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
@@ -35,7 +40,7 @@ func (c *Client) SearchCompanies(ctx context.Context, baseURL, apiKey, apiSecret
 	return items, nil
 }
 
-func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input CreateDeliveryNoteInput) (DeliveryNoteResult, error) {
+func (c *Client) CreateDraftDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input CreateDeliveryNoteInput) (DeliveryNoteResult, error) {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return DeliveryNoteResult{}, err
@@ -74,6 +79,9 @@ func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKe
 			},
 		},
 	}
+	if strings.TrimSpace(input.Remarks) != "" {
+		payload["remarks"] = strings.TrimSpace(input.Remarks)
+	}
 
 	var createResp struct {
 		Data struct {
@@ -87,21 +95,28 @@ func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKe
 	if createResp.Data.Name == "" {
 		return DeliveryNoteResult{}, fmt.Errorf("delivery note create response did not return name")
 	}
+	return DeliveryNoteResult{Name: createResp.Data.Name}, nil
+}
 
+func (c *Client) SubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
 	submitPayload := map[string]interface{}{
 		"doc": map[string]interface{}{},
 	}
 	submitEndpoint := normalized + "/api/method/frappe.client.submit"
-	docEndpoint := normalized + "/api/resource/Delivery%20Note/" + url.PathEscape(createResp.Data.Name)
+	docEndpoint := normalized + "/api/resource/Delivery%20Note/" + url.PathEscape(strings.TrimSpace(name))
 	for attempt := 0; attempt < 2; attempt++ {
 		var latest struct {
 			Data map[string]interface{} `json:"data"`
 		}
 		if err := c.doJSON(ctx, docEndpoint, apiKey, apiSecret, &latest); err != nil {
-			return DeliveryNoteResult{}, err
+			return err
 		}
 		if len(latest.Data) == 0 {
-			return DeliveryNoteResult{}, fmt.Errorf("delivery note %s not found after create", createResp.Data.Name)
+			return fmt.Errorf("delivery note %s not found after create", strings.TrimSpace(name))
 		}
 		submitPayload["doc"] = latest.Data
 
@@ -109,12 +124,121 @@ func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKe
 			if attempt == 0 && strings.Contains(err.Error(), "TimestampMismatchError") {
 				continue
 			}
-			return DeliveryNoteResult{}, err
+			return err
 		}
 		break
 	}
+	return nil
+}
 
-	return DeliveryNoteResult{Name: createResp.Data.Name}, nil
+func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input CreateDeliveryNoteInput) (DeliveryNoteResult, error) {
+	result, err := c.CreateDraftDeliveryNote(ctx, baseURL, apiKey, apiSecret, input)
+	if err != nil {
+		return DeliveryNoteResult{}, err
+	}
+	if err := c.SubmitDeliveryNote(ctx, baseURL, apiKey, apiSecret, result.Name); err != nil {
+		return DeliveryNoteResult{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) UpdateDeliveryNoteRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	endpoint := normalized + "/api/resource/Delivery%20Note/" + url.PathEscape(strings.TrimSpace(name))
+	return c.doJSONRequest(ctx, http.MethodPut, endpoint, apiKey, apiSecret, map[string]string{
+		"remarks": strings.TrimSpace(remarks),
+	}, nil)
+}
+
+func (c *Client) ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]Comment, error) {
+	itemsByName, err := c.ListDeliveryNoteCommentsBatch(ctx, baseURL, apiKey, apiSecret, []string{name}, limit)
+	if err != nil {
+		return nil, err
+	}
+	return itemsByName[strings.TrimSpace(name)], nil
+}
+
+func (c *Client) ListDeliveryNoteCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]Comment, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	normalizedNames := make([]string, 0, len(names))
+	seenNames := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seenNames[trimmed]; ok {
+			continue
+		}
+		seenNames[trimmed] = struct{}{}
+		normalizedNames = append(normalizedNames, trimmed)
+	}
+	if len(normalizedNames) == 0 {
+		return map[string][]Comment{}, nil
+	}
+
+	filtersJSON, _ := json.Marshal([][]interface{}{
+		{"reference_doctype", "=", "Delivery Note"},
+		{"reference_name", "in", normalizedNames},
+		{"comment_type", "=", "Comment"},
+	})
+	params := url.Values{}
+	params.Set("fields", `["name","content","creation","reference_name"]`)
+	params.Set("filters", string(filtersJSON))
+	params.Set("order_by", "reference_name asc, creation asc")
+	params.Set("limit_page_length", fmt.Sprintf("%d", len(normalizedNames)*limit))
+
+	var payload struct {
+		Data []struct {
+			Name          string `json:"name"`
+			Content       string `json:"content"`
+			Creation      string `json:"creation"`
+			ReferenceName string `json:"reference_name"`
+		} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Comment?" + params.Encode()
+	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
+		return nil, err
+	}
+
+	itemsByName := make(map[string][]Comment, len(normalizedNames))
+	for _, row := range payload.Data {
+		name := strings.TrimSpace(row.ReferenceName)
+		if name == "" {
+			continue
+		}
+		if len(itemsByName[name]) >= limit {
+			continue
+		}
+		itemsByName[name] = append(itemsByName[name], Comment{
+			ID:        strings.TrimSpace(row.Name),
+			Content:   strings.TrimSpace(row.Content),
+			CreatedAt: strings.TrimSpace(row.Creation),
+		})
+	}
+	for _, name := range normalizedNames {
+		if _, ok := itemsByName[name]; !ok {
+			itemsByName[name] = []Comment{}
+		}
+	}
+	return itemsByName, nil
+}
+
+func (c *Client) AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	return c.addComment(ctx, normalized, apiKey, apiSecret, "Delivery Note", name, content)
 }
 
 func (c *Client) ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]DeliveryNoteDraft, error) {
@@ -157,7 +281,7 @@ func (c *Client) ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, api
 		if err != nil {
 			return nil, err
 		}
-		if doc.ItemCode == "" || doc.ItemName == "" || doc.Qty <= 0 {
+		if doc.ItemCode == "" || doc.ItemName == "" || doc.Qty <= 0 || doc.DocStatus == 0 {
 			full, err := c.GetDeliveryNote(ctx, normalized, apiKey, apiSecret, doc.Name)
 			if err != nil {
 				return nil, err
@@ -192,6 +316,7 @@ func mapDeliveryNoteDraft(doc map[string]interface{}) (DeliveryNoteDraft, error)
 		PostingDate:  getStringValue(doc["posting_date"]),
 		Status:       getStringValue(doc["status"]),
 		DocStatus:    int(getFloatValue(doc["docstatus"])),
+		Remarks:      getStringValue(doc["remarks"]),
 	}
 	items, _ := doc["items"].([]interface{})
 	if len(items) == 0 {
@@ -206,4 +331,49 @@ func mapDeliveryNoteDraft(doc map[string]interface{}) (DeliveryNoteDraft, error)
 		result.UOM = getStringValue(firstItem["stock_uom"])
 	}
 	return result, nil
+}
+
+func UpsertCustomerDecisionInRemarks(existingNote, state, reason string) string {
+	lines := strings.Split(strings.ReplaceAll(existingNote, "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines)+2)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, accordCustomerDecisionPrefix) ||
+			strings.HasPrefix(trimmed, accordCustomerDecisionReasonPrefix) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	if strings.TrimSpace(state) != "" {
+		filtered = append(filtered, accordCustomerDecisionPrefix+" "+strings.TrimSpace(state))
+	}
+	if strings.TrimSpace(reason) != "" {
+		filtered = append(filtered, accordCustomerDecisionReasonPrefix+" "+strings.TrimSpace(reason))
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func ExtractCustomerDecisionState(remarks string) string {
+	lines := strings.Split(strings.ReplaceAll(remarks, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, accordCustomerDecisionPrefix) {
+			return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, accordCustomerDecisionPrefix)))
+		}
+	}
+	return ""
+}
+
+func ExtractCustomerDecisionReason(remarks string) string {
+	lines := strings.Split(strings.ReplaceAll(remarks, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, accordCustomerDecisionReasonPrefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, accordCustomerDecisionReasonPrefix))
+		}
+	}
+	return ""
 }

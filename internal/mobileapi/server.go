@@ -42,6 +42,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/customer/summary", s.handleCustomerSummary)
 	mux.HandleFunc("/v1/mobile/customer/history", s.handleCustomerHistory)
 	mux.HandleFunc("/v1/mobile/customer/status-details", s.handleCustomerStatusDetails)
+	mux.HandleFunc("/v1/mobile/customer/detail", s.handleCustomerDetail)
+	mux.HandleFunc("/v1/mobile/customer/respond", s.handleCustomerRespond)
 	mux.HandleFunc("/v1/mobile/notifications/detail", s.handleNotificationDetail)
 	mux.HandleFunc("/v1/mobile/notifications/comments", s.handleNotificationComment)
 	mux.HandleFunc("/v1/mobile/supplier/unannounced/respond", s.handleSupplierUnannouncedRespond)
@@ -550,6 +552,73 @@ func (s *Server) handleCustomerStatusDetails(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleCustomerDetail(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleCustomer); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	deliveryNoteID := strings.TrimSpace(r.URL.Query().Get("delivery_note_id"))
+	if deliveryNoteID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "delivery_note_id is required"})
+		return
+	}
+
+	detail, err := s.auth.CustomerDeliveryDetail(r.Context(), principal, deliveryNoteID)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer detail failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleCustomerRespond(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleCustomer); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	var req CustomerDeliveryResponseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	detail, err := s.auth.CustomerRespondDelivery(
+		r.Context(),
+		principal,
+		strings.TrimSpace(req.DeliveryNoteID),
+		req.Approve,
+		strings.TrimSpace(req.Reason),
+	)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer respond failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleSupplierStatusBreakdown(w http.ResponseWriter, r *http.Request) {

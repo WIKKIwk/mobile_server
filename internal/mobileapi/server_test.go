@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,23 +16,24 @@ import (
 )
 
 type fakeERPClient struct {
-	customers          []erpnext.Customer
-	suppliers          []erpnext.Supplier
-	items              []erpnext.Item
-	supplierItems      map[string]map[string]bool
-	uploadedAvatarURL  string
-	comments           map[string][]erpnext.Comment
-	pendingReceipts    []erpnext.PurchaseReceiptDraft
-	supplierReceipts   []erpnext.PurchaseReceiptDraft
-	telegramReceipts   []erpnext.PurchaseReceiptDraft
+	customers             []erpnext.Customer
+	suppliers             []erpnext.Supplier
+	items                 []erpnext.Item
+	supplierItems         map[string]map[string]bool
+	uploadedAvatarURL     string
+	comments              map[string][]erpnext.Comment
+	pendingReceipts       []erpnext.PurchaseReceiptDraft
+	supplierReceipts      []erpnext.PurchaseReceiptDraft
+	telegramReceipts      []erpnext.PurchaseReceiptDraft
 	customerDeliveryNotes []erpnext.DeliveryNoteDraft
-	batchCommentKeys   [][]string
-	updateRemarksErr   error
-	lastSupplierLimit  int
-	lastSupplierOffset int
-	lastTelegramLimit  int
-	lastTelegramOffset int
-	lastStockEntry     erpnext.CreateStockEntryInput
+	batchCommentKeys      [][]string
+	updateRemarksErr      error
+	lastSupplierLimit     int
+	lastSupplierOffset    int
+	lastTelegramLimit     int
+	lastTelegramOffset    int
+	lastStockEntry        erpnext.CreateStockEntryInput
+	lastDeliveryNote      erpnext.CreateDeliveryNoteInput
 }
 
 func (f *fakeERPClient) SearchItems(_ context.Context, _, _, _, query string, limit int) ([]erpnext.Item, error) {
@@ -140,6 +142,27 @@ func (f *fakeERPClient) ListCustomerDeliveryNotesPage(_ context.Context, _, _, _
 		return sliceDeliveryNotePage(f.customerDeliveryNotes, limit, offset), nil
 	}
 	return []erpnext.DeliveryNoteDraft{}, nil
+}
+
+func (f *fakeERPClient) GetDeliveryNote(_ context.Context, _, _, _, name string) (erpnext.DeliveryNoteDraft, error) {
+	for _, item := range f.customerDeliveryNotes {
+		if item.Name == name {
+			return item, nil
+		}
+	}
+	return erpnext.DeliveryNoteDraft{}, nil
+}
+
+func (f *fakeERPClient) ListDeliveryNoteComments(_ context.Context, _, _, _, name string, _ int) ([]erpnext.Comment, error) {
+	return f.comments[strings.TrimSpace(name)], nil
+}
+
+func (f *fakeERPClient) ListDeliveryNoteCommentsBatch(_ context.Context, _, _, _ string, names []string, _ int) (map[string][]erpnext.Comment, error) {
+	result := make(map[string][]erpnext.Comment, len(names))
+	for _, name := range names {
+		result[strings.TrimSpace(name)] = f.comments[strings.TrimSpace(name)]
+	}
+	return result, nil
 }
 
 func (f *fakeERPClient) ListAssignedSupplierItems(_ context.Context, _, _, _, supplier string, _ int) ([]erpnext.Item, error) {
@@ -318,6 +341,61 @@ func (f *fakeERPClient) CreateAndSubmitStockEntry(_ context.Context, _, _, _ str
 
 func (f *fakeERPClient) CreateAndSubmitDeliveryNote(_ context.Context, _, _, _ string, _ erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
 	return erpnext.DeliveryNoteResult{Name: "MAT-DN-0001"}, nil
+}
+
+func (f *fakeERPClient) CreateDraftDeliveryNote(_ context.Context, _, _, _ string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+	f.lastDeliveryNote = input
+	name := "MAT-DN-0001"
+	f.customerDeliveryNotes = append([]erpnext.DeliveryNoteDraft{{
+		Name:         name,
+		Customer:     input.Customer,
+		CustomerName: input.Customer,
+		ItemCode:     input.ItemCode,
+		ItemName:     input.ItemCode,
+		Qty:          input.Qty,
+		UOM:          input.UOM,
+		PostingDate:  "2026-03-14",
+		Status:       "Draft",
+		DocStatus:    0,
+		Remarks:      input.Remarks,
+	}}, f.customerDeliveryNotes...)
+	return erpnext.DeliveryNoteResult{Name: name}, nil
+}
+
+func (f *fakeERPClient) SubmitDeliveryNote(_ context.Context, _, _, _, name string) error {
+	for index, item := range f.customerDeliveryNotes {
+		if item.Name == name {
+			item.DocStatus = 1
+			item.Status = "Submitted"
+			f.customerDeliveryNotes[index] = item
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeERPClient) UpdateDeliveryNoteRemarks(_ context.Context, _, _, _, name, remarks string) error {
+	for index, item := range f.customerDeliveryNotes {
+		if item.Name == name {
+			item.Remarks = remarks
+			f.customerDeliveryNotes[index] = item
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeERPClient) AddDeliveryNoteComment(_ context.Context, _, _, _, name, content string) error {
+	if f.comments == nil {
+		f.comments = map[string][]erpnext.Comment{}
+	}
+	name = strings.TrimSpace(name)
+	f.comments[name] = append(f.comments[name], erpnext.Comment{
+		ID:        fmt.Sprintf("dn-comment-%d", len(f.comments[name])+1),
+		Content:   content,
+		CreatedAt: "2026-03-14 10:00:00",
+	})
+	return nil
 }
 
 func (f *fakeERPClient) ConfirmAndSubmitPurchaseReceipt(_ context.Context, _, _, _, _ string, _, _ float64, _, _ string) (erpnext.PurchaseReceiptSubmissionResult, error) {
@@ -1444,6 +1522,23 @@ func TestServerWerkaHistoryDeduplicatesReceipts(t *testing.T) {
 func TestServerCustomerSummaryAndHistory(t *testing.T) {
 	server := NewServer(NewERPAuthenticator(
 		&fakeERPClient{
+			comments: map[string][]erpnext.Comment{
+				"MAT-DN-0001": {{
+					ID:        "c1",
+					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "pending", ""),
+					CreatedAt: "2026-03-14 10:00:00",
+				}},
+				"MAT-DN-0002": {{
+					ID:        "c2",
+					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "confirmed", ""),
+					CreatedAt: "2026-03-14 10:05:00",
+				}},
+				"MAT-DN-0003": {{
+					ID:        "c3",
+					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "rejected", "xato"),
+					CreatedAt: "2026-03-14 10:10:00",
+				}},
+			},
 			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
 				{
 					Name:         "MAT-DN-0001",
@@ -1454,8 +1549,8 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 					Qty:          12,
 					UOM:          "Nos",
 					PostingDate:  "2026-03-14",
-					Status:       "Submitted",
-					DocStatus:    1,
+					Status:       "Draft",
+					DocStatus:    0,
 				},
 				{
 					Name:         "MAT-DN-0002",
@@ -1468,6 +1563,18 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 					PostingDate:  "2026-03-14",
 					Status:       "Submitted",
 					DocStatus:    1,
+				},
+				{
+					Name:         "MAT-DN-0003",
+					Customer:     "CUST-001",
+					CustomerName: "Comfi",
+					ItemCode:     "ITEM-003",
+					ItemName:     "Reject",
+					Qty:          2,
+					UOM:          "Nos",
+					PostingDate:  "2026-03-14",
+					Status:       "Draft",
+					DocStatus:    0,
 				},
 			},
 		},
@@ -1505,7 +1612,7 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 	if err := json.NewDecoder(summaryResp.Body).Decode(&summary); err != nil {
 		t.Fatalf("decode summary failed: %v", err)
 	}
-	if summary.PendingCount != 2 || summary.ConfirmedCount != 0 || summary.RejectedCount != 0 {
+	if summary.PendingCount != 1 || summary.ConfirmedCount != 1 || summary.RejectedCount != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 
@@ -1521,8 +1628,8 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 	if err := json.NewDecoder(historyResp.Body).Decode(&records); err != nil {
 		t.Fatalf("decode history failed: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(records))
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(records))
 	}
 
 	detailReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/customer/status-details?kind=pending", nil)
@@ -1537,7 +1644,95 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 	if err := json.NewDecoder(detailResp.Body).Decode(&detailRecords); err != nil {
 		t.Fatalf("decode details failed: %v", err)
 	}
-	if len(detailRecords) != 2 {
-		t.Fatalf("expected 2 detail records, got %d", len(detailRecords))
+	if len(detailRecords) != 1 {
+		t.Fatalf("expected 1 detail record, got %d", len(detailRecords))
+	}
+}
+
+func TestServerCustomerDetailAndRespond(t *testing.T) {
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			comments: map[string][]erpnext.Comment{
+				"MAT-DN-0009": {{
+					ID:        "c1",
+					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "pending", ""),
+					CreatedAt: "2026-03-14 10:00:00",
+				}},
+			},
+			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
+				{
+					Name:         "MAT-DN-0009",
+					Customer:     "CUST-001",
+					CustomerName: "Comfi",
+					ItemCode:     "ITEM-001",
+					ItemName:     "Chers",
+					Qty:          7,
+					UOM:          "Nos",
+					PostingDate:  "2026-03-14",
+					Status:       "Draft",
+					DocStatus:    0,
+				},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleCustomer,
+		DisplayName: "Comfi",
+		Ref:         "CUST-001",
+		Phone:       "+998901000333",
+	})
+	if err != nil {
+		t.Fatalf("failed to create customer session: %v", err)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/customer/detail?delivery_note_id=MAT-DN-0009", nil)
+	detailReq.Header.Set("Authorization", "Bearer "+token)
+	detailResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detailResp, detailReq)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("unexpected detail status: %d body=%s", detailResp.Code, detailResp.Body.String())
+	}
+
+	var detail CustomerDeliveryDetail
+	if err := json.NewDecoder(detailResp.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode detail failed: %v", err)
+	}
+	if !detail.CanApprove || !detail.CanReject {
+		t.Fatalf("expected pending customer actions, got %+v", detail)
+	}
+
+	respondReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/customer/respond",
+		strings.NewReader(`{"delivery_note_id":"MAT-DN-0009","approve":true}`),
+	)
+	respondReq.Header.Set("Authorization", "Bearer "+token)
+	respondReq.Header.Set("Content-Type", "application/json")
+	respondResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(respondResp, respondReq)
+	if respondResp.Code != http.StatusOK {
+		t.Fatalf("unexpected respond status: %d body=%s", respondResp.Code, respondResp.Body.String())
+	}
+
+	var updated CustomerDeliveryDetail
+	if err := json.NewDecoder(respondResp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode respond failed: %v", err)
+	}
+	if updated.Record.Status != "accepted" {
+		t.Fatalf("expected accepted status, got %+v", updated.Record)
+	}
+	if updated.CanApprove || updated.CanReject {
+		t.Fatalf("expected actions disabled after confirm, got %+v", updated)
 	}
 }

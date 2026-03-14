@@ -50,6 +50,10 @@ type ERPClient interface {
 	ListCustomerItems(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error)
 	ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]erpnext.DeliveryNoteDraft, error)
 	ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit, offset int) ([]erpnext.DeliveryNoteDraft, error)
+	GetDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)
+	ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
+	ListDeliveryNoteCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]erpnext.Comment, error)
+	AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
 	ListPendingPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListPendingPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListTelegramPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
@@ -63,7 +67,10 @@ type ERPClient interface {
 	UpdatePurchaseReceiptRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error
 	CreateDraftPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreatePurchaseReceiptInput) (erpnext.PurchaseReceiptDraft, error)
 	CreateAndSubmitStockEntry(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateStockEntryInput) (erpnext.StockEntryResult, error)
+	CreateDraftDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error)
 	CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error)
+	SubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error
+	UpdateDeliveryNoteRemarks(ctx context.Context, baseURL, apiKey, apiSecret, name, remarks string) error
 	ConfirmAndSubmitPurchaseReceipt(ctx context.Context, baseURL, apiKey, apiSecret, name string, acceptedQty, returnedQty float64, returnReason, returnComment string) (erpnext.PurchaseReceiptSubmissionResult, error)
 	UploadSupplierImage(ctx context.Context, baseURL, apiKey, apiSecret, supplierID, filename, contentType string, content []byte) (string, error)
 	DownloadFile(ctx context.Context, baseURL, apiKey, apiSecret, fileURL string) (string, []byte, error)
@@ -1009,7 +1016,7 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
-	result, err := a.erp.CreateAndSubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateDeliveryNoteInput{
+	result, err := a.erp.CreateDraftDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateDeliveryNoteInput{
 		Customer:  customer.ID,
 		Company:   company,
 		Warehouse: warehouse,
@@ -1020,6 +1027,14 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
+	_ = a.erp.AddDeliveryNoteComment(
+		ctx,
+		a.baseURL,
+		a.apiKey,
+		a.apiSecret,
+		result.Name,
+		erpnext.UpsertCustomerDecisionInRemarks("", "pending", ""),
+	)
 	return WerkaCustomerIssueRecord{
 		EntryID:      result.Name,
 		CustomerRef:  customer.ID,
@@ -1133,9 +1148,13 @@ func (a *ERPAuthenticator) CustomerHistory(ctx context.Context, principal Princi
 	if err != nil {
 		return nil, err
 	}
+	commentsByName, err := a.erp.ListDeliveryNoteCommentsBatch(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteNames(items), 50)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]DispatchRecord, 0, len(items))
 	for _, item := range items {
-		result = append(result, mapDeliveryNoteToDispatchRecord(item))
+		result = append(result, mapDeliveryNoteToDispatchRecord(item, commentsByName[item.Name]))
 	}
 	return result, nil
 }
@@ -1145,24 +1164,151 @@ func (a *ERPAuthenticator) CustomerSummary(ctx context.Context, principal Princi
 	if err != nil {
 		return CustomerHomeSummary{}, err
 	}
-	return CustomerHomeSummary{
-		PendingCount: len(items),
-	}, nil
+	summary := CustomerHomeSummary{}
+	commentsByName, err := a.erp.ListDeliveryNoteCommentsBatch(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteNames(items), 50)
+	if err != nil {
+		return CustomerHomeSummary{}, err
+	}
+	for _, item := range items {
+		switch customerDeliveryStatus(item, commentsByName[item.Name]) {
+		case "accepted":
+			summary.ConfirmedCount++
+		case "rejected":
+			summary.RejectedCount++
+		default:
+			summary.PendingCount++
+		}
+	}
+	return summary, nil
 }
 
 func (a *ERPAuthenticator) CustomerStatusDetails(ctx context.Context, principal Principal, kind string) ([]DispatchRecord, error) {
-	if strings.TrimSpace(kind) != "pending" {
-		return []DispatchRecord{}, nil
-	}
 	items, err := a.collectCustomerDeliveryNotes(ctx, principal.Ref)
 	if err != nil {
 		return nil, err
 	}
+	commentsByName, err := a.erp.ListDeliveryNoteCommentsBatch(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteNames(items), 50)
+	if err != nil {
+		return nil, err
+	}
+	filterKind := strings.TrimSpace(kind)
+	if filterKind == "confirmed" {
+		filterKind = "accepted"
+	}
 	result := make([]DispatchRecord, 0, len(items))
 	for _, item := range items {
-		result = append(result, mapDeliveryNoteToDispatchRecord(item))
+		if customerDeliveryStatus(item, commentsByName[item.Name]) != filterKind {
+			continue
+		}
+		result = append(result, mapDeliveryNoteToDispatchRecord(item, commentsByName[item.Name]))
 	}
 	return result, nil
+}
+
+func (a *ERPAuthenticator) CustomerDeliveryDetail(ctx context.Context, principal Principal, deliveryNoteID string) (CustomerDeliveryDetail, error) {
+	draft, err := a.erp.GetDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteID)
+	if err != nil {
+		return CustomerDeliveryDetail{}, err
+	}
+	if strings.TrimSpace(draft.Customer) != strings.TrimSpace(principal.Ref) {
+		return CustomerDeliveryDetail{}, ErrUnauthorized
+	}
+	comments, err := a.erp.ListDeliveryNoteComments(ctx, a.baseURL, a.apiKey, a.apiSecret, draft.Name, 50)
+	if err != nil {
+		return CustomerDeliveryDetail{}, err
+	}
+	pending := customerDeliveryStatus(draft, comments) == "pending"
+	return CustomerDeliveryDetail{
+		Record:     mapDeliveryNoteToDispatchRecord(draft, comments),
+		CanApprove: pending,
+		CanReject:  pending,
+	}, nil
+}
+
+func (a *ERPAuthenticator) CustomerRespondDelivery(ctx context.Context, principal Principal, deliveryNoteID string, approve bool, reason string) (CustomerDeliveryDetail, error) {
+	draft, err := a.erp.GetDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteID)
+	if err != nil {
+		return CustomerDeliveryDetail{}, err
+	}
+	if strings.TrimSpace(draft.Customer) != strings.TrimSpace(principal.Ref) {
+		return CustomerDeliveryDetail{}, ErrUnauthorized
+	}
+	comments, err := a.erp.ListDeliveryNoteComments(ctx, a.baseURL, a.apiKey, a.apiSecret, draft.Name, 50)
+	if err != nil {
+		return CustomerDeliveryDetail{}, err
+	}
+	if customerDeliveryStatus(draft, comments) != "pending" {
+		return CustomerDeliveryDetail{}, fmt.Errorf("delivery note is not pending")
+	}
+
+	if approve {
+		if err := a.erp.AddDeliveryNoteComment(
+			ctx,
+			a.baseURL,
+			a.apiKey,
+			a.apiSecret,
+			draft.Name,
+			erpnext.UpsertCustomerDecisionInRemarks("", "confirmed", ""),
+		); err != nil {
+			return CustomerDeliveryDetail{}, err
+		}
+		if err := a.erp.SubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, draft.Name); err != nil {
+			return CustomerDeliveryDetail{}, err
+		}
+		return a.CustomerDeliveryDetail(ctx, principal, draft.Name)
+	}
+
+	if err := a.erp.AddDeliveryNoteComment(
+		ctx,
+		a.baseURL,
+		a.apiKey,
+		a.apiSecret,
+		draft.Name,
+		erpnext.UpsertCustomerDecisionInRemarks("", "rejected", reason),
+	); err != nil {
+		return CustomerDeliveryDetail{}, err
+	}
+	return a.CustomerDeliveryDetail(ctx, principal, draft.Name)
+}
+
+func customerDeliveryStatus(item erpnext.DeliveryNoteDraft, comments []erpnext.Comment) string {
+	state := latestCustomerDecisionState(comments)
+	switch {
+	case state == "rejected":
+		return "rejected"
+	case item.DocStatus == 1 || state == "confirmed":
+		return "accepted"
+	default:
+		return "pending"
+	}
+}
+
+func latestCustomerDecisionState(comments []erpnext.Comment) string {
+	for index := len(comments) - 1; index >= 0; index-- {
+		if state := strings.TrimSpace(erpnext.ExtractCustomerDecisionState(comments[index].Content)); state != "" {
+			return state
+		}
+	}
+	return ""
+}
+
+func latestCustomerDecisionReason(comments []erpnext.Comment) string {
+	for index := len(comments) - 1; index >= 0; index-- {
+		if reason := strings.TrimSpace(erpnext.ExtractCustomerDecisionReason(comments[index].Content)); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func deliveryNoteNames(items []erpnext.DeliveryNoteDraft) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item.Name); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (a *ERPAuthenticator) SupplierItems(ctx context.Context, principal Principal, query string, limit int) ([]SupplierItem, error) {
@@ -1537,7 +1683,20 @@ func mapPurchaseReceiptToDispatchRecord(item erpnext.PurchaseReceiptDraft, fallb
 	}
 }
 
-func mapDeliveryNoteToDispatchRecord(item erpnext.DeliveryNoteDraft) DispatchRecord {
+func mapDeliveryNoteToDispatchRecord(item erpnext.DeliveryNoteDraft, comments []erpnext.Comment) DispatchRecord {
+	status := customerDeliveryStatus(item, comments)
+	acceptedQty := 0.0
+	note := ""
+	switch status {
+	case "accepted":
+		acceptedQty = item.Qty
+		note = "Customer tasdiqladi."
+	case "rejected":
+		note = "Customer rad etdi."
+		if reason := strings.TrimSpace(latestCustomerDecisionReason(comments)); reason != "" {
+			note += " Sabab: " + reason
+		}
+	}
 	return DispatchRecord{
 		ID:           item.Name,
 		SupplierRef:  item.Customer,
@@ -1546,8 +1705,9 @@ func mapDeliveryNoteToDispatchRecord(item erpnext.DeliveryNoteDraft) DispatchRec
 		ItemName:     item.ItemName,
 		UOM:          item.UOM,
 		SentQty:      item.Qty,
-		AcceptedQty:  0,
-		Status:       "pending",
+		AcceptedQty:  acceptedQty,
+		Note:         note,
+		Status:       status,
 		CreatedLabel: item.PostingDate,
 	}
 }
