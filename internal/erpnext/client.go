@@ -89,6 +89,19 @@ type DeliveryNoteResult struct {
 	Name string
 }
 
+type DeliveryNoteDraft struct {
+	Name         string
+	Customer     string
+	CustomerName string
+	ItemCode     string
+	ItemName     string
+	Qty          float64
+	UOM          string
+	PostingDate  string
+	Status       string
+	DocStatus    int
+}
+
 type Client struct {
 	httpClient *http.Client
 }

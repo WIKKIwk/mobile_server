@@ -2,6 +2,7 @@ package erpnext
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -114,4 +115,73 @@ func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKe
 	}
 
 	return DeliveryNoteResult{Name: createResp.Data.Name}, nil
+}
+
+func (c *Client) ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]DeliveryNoteDraft, error) {
+	return c.ListCustomerDeliveryNotesPage(ctx, baseURL, apiKey, apiSecret, customer, limit, 0)
+}
+
+func (c *Client) ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit, offset int) ([]DeliveryNoteDraft, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	filtersJSON, _ := json.Marshal([][]interface{}{
+		{"customer", "=", strings.TrimSpace(customer)},
+	})
+
+	params := url.Values{}
+	params.Set("fields", `["name","customer","customer_name","posting_date","status","docstatus","items"]`)
+	params.Set("filters", string(filtersJSON))
+	params.Set("limit_page_length", fmt.Sprintf("%d", limit))
+	if offset > 0 {
+		params.Set("limit_start", fmt.Sprintf("%d", offset))
+	}
+	params.Set("order_by", "modified desc")
+
+	var payload struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	endpoint := normalized + "/api/resource/Delivery%20Note?" + params.Encode()
+	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
+		return nil, err
+	}
+
+	items := make([]DeliveryNoteDraft, 0, len(payload.Data))
+	for _, row := range payload.Data {
+		doc, err := mapDeliveryNoteDraft(row)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, doc)
+	}
+	return items, nil
+}
+
+func mapDeliveryNoteDraft(doc map[string]interface{}) (DeliveryNoteDraft, error) {
+	result := DeliveryNoteDraft{
+		Name:         getStringValue(doc["name"]),
+		Customer:     getStringValue(doc["customer"]),
+		CustomerName: getStringValue(doc["customer_name"]),
+		PostingDate:  getStringValue(doc["posting_date"]),
+		Status:       getStringValue(doc["status"]),
+		DocStatus:    int(getFloatValue(doc["docstatus"])),
+	}
+	items, _ := doc["items"].([]interface{})
+	if len(items) == 0 {
+		return result, nil
+	}
+	firstItem, _ := items[0].(map[string]interface{})
+	result.ItemCode = getStringValue(firstItem["item_code"])
+	result.ItemName = getStringValue(firstItem["item_name"])
+	result.Qty = getFloatValue(firstItem["qty"])
+	result.UOM = getStringValue(firstItem["uom"])
+	if result.UOM == "" {
+		result.UOM = getStringValue(firstItem["stock_uom"])
+	}
+	return result, nil
 }

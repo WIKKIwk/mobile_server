@@ -39,6 +39,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/profile/avatar", s.handleProfileAvatar)
 	mux.HandleFunc("/v1/mobile/profile/avatar/view", s.handleProfileAvatarView)
 	mux.HandleFunc("/v1/mobile/push/token", s.handlePushToken)
+	mux.HandleFunc("/v1/mobile/customer/summary", s.handleCustomerSummary)
+	mux.HandleFunc("/v1/mobile/customer/history", s.handleCustomerHistory)
+	mux.HandleFunc("/v1/mobile/customer/status-details", s.handleCustomerStatusDetails)
 	mux.HandleFunc("/v1/mobile/notifications/detail", s.handleNotificationDetail)
 	mux.HandleFunc("/v1/mobile/notifications/comments", s.handleNotificationComment)
 	mux.HandleFunc("/v1/mobile/supplier/unannounced/respond", s.handleSupplierUnannouncedRespond)
@@ -492,6 +495,61 @@ func (s *Server) handleSupplierSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleCustomerSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleCustomer); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	summary, err := s.auth.CustomerSummary(r.Context(), principal)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer summary failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleCustomerHistory(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleCustomer); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	items, err := s.auth.CustomerHistory(r.Context(), principal, 100)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer history failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleCustomerStatusDetails(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleCustomer); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	items, err := s.auth.CustomerStatusDetails(r.Context(), principal, kind)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer status details failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleSupplierStatusBreakdown(w http.ResponseWriter, r *http.Request) {

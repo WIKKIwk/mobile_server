@@ -24,6 +24,7 @@ type fakeERPClient struct {
 	pendingReceipts    []erpnext.PurchaseReceiptDraft
 	supplierReceipts   []erpnext.PurchaseReceiptDraft
 	telegramReceipts   []erpnext.PurchaseReceiptDraft
+	customerDeliveryNotes []erpnext.DeliveryNoteDraft
 	batchCommentKeys   [][]string
 	updateRemarksErr   error
 	lastSupplierLimit  int
@@ -128,6 +129,17 @@ func (f *fakeERPClient) SearchSupplierItems(_ context.Context, _, _, _, _, _ str
 
 func (f *fakeERPClient) ListCustomerItems(_ context.Context, _, _, _, _ string, query string, limit int) ([]erpnext.Item, error) {
 	return filterFakeItems(f.items, query, limit), nil
+}
+
+func (f *fakeERPClient) ListCustomerDeliveryNotes(_ context.Context, _, _, _, _ string, limit int) ([]erpnext.DeliveryNoteDraft, error) {
+	return f.ListCustomerDeliveryNotesPage(context.Background(), "", "", "", "", limit, 0)
+}
+
+func (f *fakeERPClient) ListCustomerDeliveryNotesPage(_ context.Context, _, _, _, _ string, limit, offset int) ([]erpnext.DeliveryNoteDraft, error) {
+	if f.customerDeliveryNotes != nil {
+		return sliceDeliveryNotePage(f.customerDeliveryNotes, limit, offset), nil
+	}
+	return []erpnext.DeliveryNoteDraft{}, nil
 }
 
 func (f *fakeERPClient) ListAssignedSupplierItems(_ context.Context, _, _, _, supplier string, _ int) ([]erpnext.Item, error) {
@@ -361,6 +373,19 @@ func sliceReceiptPage(items []erpnext.PurchaseReceiptDraft, limit, offset int) [
 		limit = len(items) - offset
 	}
 	return append([]erpnext.PurchaseReceiptDraft(nil), items[offset:offset+limit]...)
+}
+
+func sliceDeliveryNotePage(items []erpnext.DeliveryNoteDraft, limit, offset int) []erpnext.DeliveryNoteDraft {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []erpnext.DeliveryNoteDraft{}
+	}
+	if limit <= 0 || offset+limit > len(items) {
+		limit = len(items) - offset
+	}
+	return append([]erpnext.DeliveryNoteDraft(nil), items[offset:offset+limit]...)
 }
 
 func TestServerLoginAndMeFlow(t *testing.T) {
@@ -1413,5 +1438,106 @@ func TestServerWerkaHistoryDeduplicatesReceipts(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 deduped receipt, got %d", len(items))
+	}
+}
+
+func TestServerCustomerSummaryAndHistory(t *testing.T) {
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
+				{
+					Name:         "MAT-DN-0001",
+					Customer:     "CUST-001",
+					CustomerName: "Comfi",
+					ItemCode:     "ITEM-001",
+					ItemName:     "Chers",
+					Qty:          12,
+					UOM:          "Nos",
+					PostingDate:  "2026-03-14",
+					Status:       "Submitted",
+					DocStatus:    1,
+				},
+				{
+					Name:         "MAT-DN-0002",
+					Customer:     "CUST-001",
+					CustomerName: "Comfi",
+					ItemCode:     "ITEM-002",
+					ItemName:     "Test",
+					Qty:          5,
+					UOM:          "Kg",
+					PostingDate:  "2026-03-14",
+					Status:       "Submitted",
+					DocStatus:    1,
+				},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleCustomer,
+		DisplayName: "Comfi",
+		Ref:         "CUST-001",
+		Phone:       "+998901000333",
+	})
+	if err != nil {
+		t.Fatalf("failed to create customer session: %v", err)
+	}
+
+	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/customer/summary", nil)
+	summaryReq.Header.Set("Authorization", "Bearer "+token)
+	summaryResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(summaryResp, summaryReq)
+	if summaryResp.Code != http.StatusOK {
+		t.Fatalf("unexpected summary status: %d body=%s", summaryResp.Code, summaryResp.Body.String())
+	}
+
+	var summary CustomerHomeSummary
+	if err := json.NewDecoder(summaryResp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary failed: %v", err)
+	}
+	if summary.PendingCount != 2 || summary.ConfirmedCount != 0 || summary.RejectedCount != 0 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+
+	historyReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/customer/history", nil)
+	historyReq.Header.Set("Authorization", "Bearer "+token)
+	historyResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(historyResp, historyReq)
+	if historyResp.Code != http.StatusOK {
+		t.Fatalf("unexpected history status: %d body=%s", historyResp.Code, historyResp.Body.String())
+	}
+
+	var records []DispatchRecord
+	if err := json.NewDecoder(historyResp.Body).Decode(&records); err != nil {
+		t.Fatalf("decode history failed: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/customer/status-details?kind=pending", nil)
+	detailReq.Header.Set("Authorization", "Bearer "+token)
+	detailResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detailResp, detailReq)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("unexpected details status: %d body=%s", detailResp.Code, detailResp.Body.String())
+	}
+
+	var detailRecords []DispatchRecord
+	if err := json.NewDecoder(detailResp.Body).Decode(&detailRecords); err != nil {
+		t.Fatalf("decode details failed: %v", err)
+	}
+	if len(detailRecords) != 2 {
+		t.Fatalf("expected 2 detail records, got %d", len(detailRecords))
 	}
 }

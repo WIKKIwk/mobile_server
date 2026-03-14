@@ -83,6 +83,12 @@ type CustomerDirectoryEntry struct {
 	Phone string `json:"phone"`
 }
 
+type CustomerHomeSummary struct {
+	PendingCount   int `json:"pending_count"`
+	ConfirmedCount int `json:"confirmed_count"`
+	RejectedCount  int `json:"rejected_count"`
+}
+
 type SupplierHomeSummary struct {
 	PendingCount   int `json:"pending_count"`
 	SubmittedCount int `json:"submitted_count"`

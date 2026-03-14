@@ -48,6 +48,8 @@ type ERPClient interface {
 	AssignSupplierToItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, supplier string) error
 	RemoveSupplierFromItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, supplier string) error
 	ListCustomerItems(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error)
+	ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]erpnext.DeliveryNoteDraft, error)
+	ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit, offset int) ([]erpnext.DeliveryNoteDraft, error)
 	ListPendingPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListPendingPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListTelegramPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
@@ -680,6 +682,32 @@ func uniquePurchaseReceiptsByName(items []erpnext.PurchaseReceiptDraft) []erpnex
 	return result
 }
 
+func (a *ERPAuthenticator) collectCustomerDeliveryNotes(ctx context.Context, customerRef string) ([]erpnext.DeliveryNoteDraft, error) {
+	const pageSize = 200
+	result := make([]erpnext.DeliveryNoteDraft, 0, pageSize)
+	seen := make(map[string]struct{}, pageSize)
+	for offset := 0; ; offset += pageSize {
+		items, err := a.erp.ListCustomerDeliveryNotesPage(ctx, a.baseURL, a.apiKey, a.apiSecret, customerRef, pageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			result = append(result, item)
+		}
+		if len(items) < pageSize {
+			return result, nil
+		}
+	}
+}
+
 func (a *ERPAuthenticator) purchaseReceiptCommentsByName(ctx context.Context, items []erpnext.PurchaseReceiptDraft, limit int) (map[string][]erpnext.Comment, error) {
 	if len(items) == 0 {
 		return map[string][]erpnext.Comment{}, nil
@@ -1100,6 +1128,43 @@ func (a *ERPAuthenticator) AdminActivity(ctx context.Context, limit int) ([]Disp
 	return a.WerkaHistory(ctx, limit)
 }
 
+func (a *ERPAuthenticator) CustomerHistory(ctx context.Context, principal Principal, limit int) ([]DispatchRecord, error) {
+	items, err := a.erp.ListCustomerDeliveryNotes(ctx, a.baseURL, a.apiKey, a.apiSecret, principal.Ref, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]DispatchRecord, 0, len(items))
+	for _, item := range items {
+		result = append(result, mapDeliveryNoteToDispatchRecord(item))
+	}
+	return result, nil
+}
+
+func (a *ERPAuthenticator) CustomerSummary(ctx context.Context, principal Principal) (CustomerHomeSummary, error) {
+	items, err := a.collectCustomerDeliveryNotes(ctx, principal.Ref)
+	if err != nil {
+		return CustomerHomeSummary{}, err
+	}
+	return CustomerHomeSummary{
+		PendingCount: len(items),
+	}, nil
+}
+
+func (a *ERPAuthenticator) CustomerStatusDetails(ctx context.Context, principal Principal, kind string) ([]DispatchRecord, error) {
+	if strings.TrimSpace(kind) != "pending" {
+		return []DispatchRecord{}, nil
+	}
+	items, err := a.collectCustomerDeliveryNotes(ctx, principal.Ref)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]DispatchRecord, 0, len(items))
+	for _, item := range items {
+		result = append(result, mapDeliveryNoteToDispatchRecord(item))
+	}
+	return result, nil
+}
+
 func (a *ERPAuthenticator) SupplierItems(ctx context.Context, principal Principal, query string, limit int) ([]SupplierItem, error) {
 	return a.supplierAllowedItems(ctx, principal, query, limit)
 }
@@ -1468,6 +1533,21 @@ func mapPurchaseReceiptToDispatchRecord(item erpnext.PurchaseReceiptDraft, fallb
 		EventType:    eventType,
 		Highlight:    "",
 		Status:       status,
+		CreatedLabel: item.PostingDate,
+	}
+}
+
+func mapDeliveryNoteToDispatchRecord(item erpnext.DeliveryNoteDraft) DispatchRecord {
+	return DispatchRecord{
+		ID:           item.Name,
+		SupplierRef:  item.Customer,
+		SupplierName: item.CustomerName,
+		ItemCode:     item.ItemCode,
+		ItemName:     item.ItemName,
+		UOM:          item.UOM,
+		SentQty:      item.Qty,
+		AcceptedQty:  0,
+		Status:       "pending",
 		CreatedLabel: item.PostingDate,
 	}
 }

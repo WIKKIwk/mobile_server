@@ -22,6 +22,7 @@ type SupplierItem = core.SupplierItem
 type SupplierDirectoryEntry = core.SupplierDirectoryEntry
 type CustomerDirectoryEntry = core.CustomerDirectoryEntry
 type SupplierHomeSummary = core.SupplierHomeSummary
+type CustomerHomeSummary = core.CustomerHomeSummary
 type SupplierStatusBreakdownEntry = core.SupplierStatusBreakdownEntry
 type WerkaHomeSummary = core.WerkaHomeSummary
 type WerkaStatusBreakdownEntry = core.WerkaStatusBreakdownEntry

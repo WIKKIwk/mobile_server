@@ -105,6 +105,14 @@ func (s *adminSuppliersERPStub) ListCustomerItems(ctx context.Context, baseURL, 
 	return nil, nil
 }
 
+func (s *adminSuppliersERPStub) ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]erpnext.DeliveryNoteDraft, error) {
+	return nil, nil
+}
+
+func (s *adminSuppliersERPStub) ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit, offset int) ([]erpnext.DeliveryNoteDraft, error) {
+	return nil, nil
+}
+
 func (s *adminSuppliersERPStub) ListAssignedSupplierItems(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error) {
 	if s.listAssignedSupplierItems != nil {
 		return s.listAssignedSupplierItems(ctx, baseURL, apiKey, apiSecret, supplier, limit)
