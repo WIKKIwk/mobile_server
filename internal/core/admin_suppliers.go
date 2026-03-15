@@ -431,6 +431,13 @@ func (a *ERPAuthenticator) AdminCustomers(ctx context.Context, limit int) ([]Cus
 	}
 	result := make([]CustomerDirectoryEntry, 0, len(items))
 	for _, item := range items {
+		state, err := a.adminSupplierState(item.ID)
+		if err != nil {
+			return nil, err
+		}
+		if state.Removed {
+			continue
+		}
 		result = append(result, CustomerDirectoryEntry{
 			Ref:   item.ID,
 			Name:  item.Name,
@@ -449,6 +456,13 @@ func (a *ERPAuthenticator) AdminCustomerDetail(ctx context.Context, ref string) 
 	if err != nil {
 		return AdminCustomerDetail{}, err
 	}
+	if state.Removed {
+		return AdminCustomerDetail{}, ErrAdminSupplierNotFound
+	}
+	assignedItems, err := a.WerkaCustomerItems(ctx, item.ID, "", 200)
+	if err != nil {
+		return AdminCustomerDetail{}, err
+	}
 	code := strings.TrimSpace(state.CustomCode)
 	return AdminCustomerDetail{
 		Ref:               item.ID,
@@ -457,6 +471,7 @@ func (a *ERPAuthenticator) AdminCustomerDetail(ctx context.Context, ref string) 
 		Code:              code,
 		CodeLocked:        state.isCodeLocked(a.nowUTC()),
 		CodeRetryAfterSec: state.retryAfterSeconds(a.nowUTC()),
+		AssignedItems:     assignedItems,
 	}, nil
 }
 
@@ -482,18 +497,7 @@ func (a *ERPAuthenticator) AdminUpdateCustomerPhone(ctx context.Context, ref, ph
 	if err := a.erp.UpdateCustomerContact(ctx, a.baseURL, a.apiKey, a.apiSecret, item.ID, normalizedPhone, details); err != nil {
 		return AdminCustomerDetail{}, err
 	}
-	state, err := a.adminSupplierState(item.ID)
-	if err != nil {
-		return AdminCustomerDetail{}, err
-	}
-	return AdminCustomerDetail{
-		Ref:               item.ID,
-		Name:              item.Name,
-		Phone:             normalizedPhone,
-		Code:              strings.TrimSpace(state.CustomCode),
-		CodeLocked:        state.isCodeLocked(a.nowUTC()),
-		CodeRetryAfterSec: state.retryAfterSeconds(a.nowUTC()),
-	}, nil
+	return a.AdminCustomerDetail(ctx, item.ID)
 }
 
 func (a *ERPAuthenticator) AdminRegenerateCustomerCode(ctx context.Context, ref string) (AdminCustomerDetail, error) {
@@ -533,14 +537,26 @@ func (a *ERPAuthenticator) AdminRegenerateCustomerCode(ctx context.Context, ref 
 	if err := a.erp.UpdateCustomerDetails(ctx, a.baseURL, a.apiKey, a.apiSecret, item.ID, details); err != nil {
 		return AdminCustomerDetail{}, err
 	}
-	return AdminCustomerDetail{
-		Ref:               item.ID,
-		Name:              item.Name,
-		Phone:             item.Phone,
-		Code:              strings.TrimSpace(state.CustomCode),
-		CodeLocked:        state.isCodeLocked(a.nowUTC()),
-		CodeRetryAfterSec: state.retryAfterSeconds(a.nowUTC()),
-	}, nil
+	return a.AdminCustomerDetail(ctx, item.ID)
+}
+
+func (a *ERPAuthenticator) AdminRemoveCustomer(ctx context.Context, ref string) error {
+	item, err := a.erp.GetCustomer(ctx, a.baseURL, a.apiKey, a.apiSecret, strings.TrimSpace(ref))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(item.ID) == "" {
+		return ErrAdminSupplierNotFound
+	}
+
+	state, err := a.adminSupplierState(item.ID)
+	if err != nil {
+		return err
+	}
+	state.Removed = true
+	state.Blocked = true
+	state.UpdatedAt = time.Now().UTC()
+	return a.saveAdminSupplierState(item.ID, state)
 }
 
 func (a *ERPAuthenticator) supplierAllowedItems(ctx context.Context, principal Principal, query string, limit int) ([]SupplierItem, error) {

@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/admin/customers/detail", s.handleAdminCustomerDetail)
 	mux.HandleFunc("/v1/mobile/admin/customers/phone", s.handleAdminCustomerPhone)
 	mux.HandleFunc("/v1/mobile/admin/customers/code/regenerate", s.handleAdminCustomerCodeRegenerate)
+	mux.HandleFunc("/v1/mobile/admin/customers/remove", s.handleAdminCustomerRemove)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/summary", s.handleAdminSupplierSummary)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/detail", s.handleAdminSupplierDetail)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/inactive", s.handleAdminInactiveSuppliers)
@@ -1248,6 +1249,37 @@ func (s *Server) handleAdminCustomerCodeRegenerate(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminCustomerRemove(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref is required"})
+		return
+	}
+
+	if err := s.auth.AdminRemoveCustomer(r.Context(), ref); err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "customer not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer remove failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAdminSupplierSummary(w http.ResponseWriter, r *http.Request) {

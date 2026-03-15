@@ -243,12 +243,13 @@ type AdminSupplierDetail struct {
 }
 
 type AdminCustomerDetail struct {
-	Ref               string `json:"ref"`
-	Name              string `json:"name"`
-	Phone             string `json:"phone"`
-	Code              string `json:"code"`
-	CodeLocked        bool   `json:"code_locked"`
-	CodeRetryAfterSec int    `json:"code_retry_after_sec"`
+	Ref               string         `json:"ref"`
+	Name              string         `json:"name"`
+	Phone             string         `json:"phone"`
+	Code              string         `json:"code"`
+	CodeLocked        bool           `json:"code_locked"`
+	CodeRetryAfterSec int            `json:"code_retry_after_sec"`
+	AssignedItems     []SupplierItem `json:"assigned_items"`
 }
 
 type AdminCustomerPhoneUpdateRequest struct {
