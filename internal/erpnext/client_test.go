@@ -105,6 +105,26 @@ func TestSearchItems(t *testing.T) {
 	}
 }
 
+func TestSearchItemsHonorsHigherLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/resource/Item" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("limit_page_length"); got != "200" {
+			t.Fatalf("expected limit_page_length=200, got %q", got)
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(&http.Client{Timeout: 3 * time.Second})
+	_, err := client.SearchItems(context.Background(), server.URL, "key", "secret", "", 200)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSearchSupplierItems(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -136,8 +136,11 @@ func (c *Client) SearchItems(ctx context.Context, baseURL, apiKey, apiSecret, qu
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 {
 		limit = 20
+	}
+	if limit > 500 {
+		limit = 500
 	}
 
 	seen := make(map[string]struct{})
