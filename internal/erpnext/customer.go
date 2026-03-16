@@ -297,22 +297,26 @@ func (c *Client) RemoveCustomerFromItem(ctx context.Context, baseURL, apiKey, ap
 		return fmt.Errorf("customer not found")
 	}
 
-	endpoint := normalized + "/api/resource/Item/" + url.PathEscape(strings.TrimSpace(itemCode))
+	filtersJSON, _ := json.Marshal([][]interface{}{
+		{"parent", "=", strings.TrimSpace(itemCode)},
+		{"customer_name", "=", customerLink},
+	})
+	params := url.Values{}
+	params.Set("fields", `["name","customer_name"]`)
+	params.Set("filters", string(filtersJSON))
+	params.Set("limit_page_length", "100")
+
+	endpoint := normalized + "/api/resource/Item%20Customer%20Detail?" + params.Encode()
 	var payload struct {
-		Data struct {
-			CustomerItems []struct {
-				Name         string `json:"name"`
-				CustomerName string `json:"customer_name"`
-			} `json:"customer_items"`
+		Data []struct {
+			Name         string `json:"name"`
+			CustomerName string `json:"customer_name"`
 		} `json:"data"`
 	}
 	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
 		return err
 	}
-	for _, row := range payload.Data.CustomerItems {
-		if !strings.EqualFold(strings.TrimSpace(row.CustomerName), customerLink) {
-			continue
-		}
+	for _, row := range payload.Data {
 		if strings.TrimSpace(row.Name) == "" {
 			continue
 		}
