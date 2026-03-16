@@ -52,6 +52,7 @@ type ERPClient interface {
 	RemoveSupplierFromItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, supplier string) error
 	ListCustomerItems(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error)
 	AssignCustomerToItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, customerRef string) error
+	RemoveCustomerFromItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, customerRef string) error
 	ListCustomerDeliveryNotes(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit int) ([]erpnext.DeliveryNoteDraft, error)
 	ListCustomerDeliveryNotesPage(ctx context.Context, baseURL, apiKey, apiSecret, customer string, limit, offset int) ([]erpnext.DeliveryNoteDraft, error)
 	GetDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)

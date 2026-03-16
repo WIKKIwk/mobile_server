@@ -283,6 +283,47 @@ func (c *Client) AssignCustomerToItem(ctx context.Context, baseURL, apiKey, apiS
 	}, nil)
 }
 
+func (c *Client) RemoveCustomerFromItem(ctx context.Context, baseURL, apiKey, apiSecret, itemCode, customerRef string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	customer, err := c.GetCustomer(ctx, normalized, apiKey, apiSecret, customerRef)
+	if err != nil {
+		return err
+	}
+	customerLink := strings.TrimSpace(customer.ID)
+	if customerLink == "" {
+		return fmt.Errorf("customer not found")
+	}
+
+	endpoint := normalized + "/api/resource/Item/" + url.PathEscape(strings.TrimSpace(itemCode))
+	var payload struct {
+		Data struct {
+			CustomerItems []struct {
+				Name         string `json:"name"`
+				CustomerName string `json:"customer_name"`
+			} `json:"customer_items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
+		return err
+	}
+	for _, row := range payload.Data.CustomerItems {
+		if !strings.EqualFold(strings.TrimSpace(row.CustomerName), customerLink) {
+			continue
+		}
+		if strings.TrimSpace(row.Name) == "" {
+			continue
+		}
+		deleteEndpoint := normalized + "/api/resource/Item%20Customer%20Detail/" + url.PathEscape(strings.TrimSpace(row.Name))
+		if err := c.doJSONRequest(ctx, http.MethodDelete, deleteEndpoint, apiKey, apiSecret, nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Client) itemMatchesCustomer(ctx context.Context, normalized, apiKey, apiSecret, itemCode string, customerKeys map[string]struct{}) (bool, Item, error) {
 	endpoint := normalized + "/api/resource/Item/" + url.PathEscape(strings.TrimSpace(itemCode))
 	var payload struct {

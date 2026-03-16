@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/admin/customers/phone", s.handleAdminCustomerPhone)
 	mux.HandleFunc("/v1/mobile/admin/customers/code/regenerate", s.handleAdminCustomerCodeRegenerate)
 	mux.HandleFunc("/v1/mobile/admin/customers/items/add", s.handleAdminCustomerItemAdd)
+	mux.HandleFunc("/v1/mobile/admin/customers/items/remove", s.handleAdminCustomerItemRemove)
 	mux.HandleFunc("/v1/mobile/admin/customers/remove", s.handleAdminCustomerRemove)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/summary", s.handleAdminSupplierSummary)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/detail", s.handleAdminSupplierDetail)
@@ -1313,6 +1314,37 @@ func (s *Server) handleAdminCustomerItemAdd(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer item add failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAdminCustomerItemRemove(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	itemCode := strings.TrimSpace(r.URL.Query().Get("item_code"))
+	if ref == "" || itemCode == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref and item_code are required"})
+		return
+	}
+	detail, err := s.auth.AdminUnassignCustomerItem(r.Context(), ref, itemCode)
+	if err != nil {
+		if errors.Is(err, ErrAdminSupplierNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "customer not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer item remove failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)

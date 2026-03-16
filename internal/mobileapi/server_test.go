@@ -232,6 +232,14 @@ func (f *fakeERPClient) AssignCustomerToItem(_ context.Context, _, _, _, itemCod
 	return nil
 }
 
+func (f *fakeERPClient) RemoveCustomerFromItem(_ context.Context, _, _, _, itemCode, customerRef string) error {
+	if f.customerItems == nil || f.customerItems[customerRef] == nil {
+		return nil
+	}
+	delete(f.customerItems[customerRef], itemCode)
+	return nil
+}
+
 func (f *fakeERPClient) GetSupplier(_ context.Context, _, _, _, id string) (erpnext.Supplier, error) {
 	for _, item := range f.suppliers {
 		if item.ID == id {
