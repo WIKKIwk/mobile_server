@@ -1263,6 +1263,9 @@ func (a *ERPAuthenticator) CustomerHistory(ctx context.Context, principal Princi
 	}
 	result := make([]DispatchRecord, 0, len(items))
 	for _, item := range items {
+		if !customerDeliveryVisible(item, commentsByName[item.Name]) {
+			continue
+		}
 		result = append(result, mapDeliveryNoteToDispatchRecord(item, commentsByName[item.Name]))
 	}
 	return result, nil
@@ -1279,7 +1282,11 @@ func (a *ERPAuthenticator) CustomerSummary(ctx context.Context, principal Princi
 		return CustomerHomeSummary{}, err
 	}
 	for _, item := range items {
-		switch customerDeliveryStatus(item, commentsByName[item.Name]) {
+		comments := commentsByName[item.Name]
+		if !customerDeliveryVisible(item, comments) {
+			continue
+		}
+		switch customerDeliveryStatus(item, comments) {
 		case "accepted":
 			summary.ConfirmedCount++
 		case "rejected":
@@ -1306,10 +1313,14 @@ func (a *ERPAuthenticator) CustomerStatusDetails(ctx context.Context, principal 
 	}
 	result := make([]DispatchRecord, 0, len(items))
 	for _, item := range items {
-		if customerDeliveryStatus(item, commentsByName[item.Name]) != filterKind {
+		comments := commentsByName[item.Name]
+		if !customerDeliveryVisible(item, comments) {
 			continue
 		}
-		result = append(result, mapDeliveryNoteToDispatchRecord(item, commentsByName[item.Name]))
+		if customerDeliveryStatus(item, comments) != filterKind {
+			continue
+		}
+		result = append(result, mapDeliveryNoteToDispatchRecord(item, comments))
 	}
 	return result, nil
 }
@@ -1408,9 +1419,19 @@ func customerDeliveryStatus(item erpnext.DeliveryNoteDraft, comments []erpnext.C
 		return "rejected"
 	case state == "confirmed":
 		return "accepted"
-	default:
+	case item.DocStatus == 1:
 		return "pending"
+	default:
+		return "draft"
 	}
+}
+
+func customerDeliveryVisible(item erpnext.DeliveryNoteDraft, comments []erpnext.Comment) bool {
+	state := latestCustomerDecisionState(comments)
+	if state == "confirmed" || state == "rejected" {
+		return true
+	}
+	return item.DocStatus == 1
 }
 
 func latestCustomerDecisionState(comments []erpnext.Comment) string {

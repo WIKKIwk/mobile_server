@@ -1587,11 +1587,6 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 	server := NewServer(NewERPAuthenticator(
 		&fakeERPClient{
 			comments: map[string][]erpnext.Comment{
-				"MAT-DN-0001": {{
-					ID:        "c1",
-					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "pending", ""),
-					CreatedAt: "2026-03-14 10:00:00",
-				}},
 				"MAT-DN-0002": {{
 					ID:        "c2",
 					Content:   erpnext.UpsertCustomerDecisionInRemarks("", "confirmed", ""),
@@ -1613,8 +1608,8 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 					Qty:          12,
 					UOM:          "Nos",
 					PostingDate:  "2026-03-14",
-					Status:       "Draft",
-					DocStatus:    0,
+					Status:       "Submitted",
+					DocStatus:    1,
 				},
 				{
 					Name:         "MAT-DN-0002",
@@ -1635,6 +1630,18 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 					ItemCode:     "ITEM-003",
 					ItemName:     "Reject",
 					Qty:          2,
+					UOM:          "Nos",
+					PostingDate:  "2026-03-14",
+					Status:       "Draft",
+					DocStatus:    0,
+				},
+				{
+					Name:         "MAT-DN-0004",
+					Customer:     "CUST-001",
+					CustomerName: "Comfi",
+					ItemCode:     "ITEM-004",
+					ItemName:     "Hidden draft",
+					Qty:          1,
 					UOM:          "Nos",
 					PostingDate:  "2026-03-14",
 					Status:       "Draft",
@@ -1733,8 +1740,8 @@ func TestServerCustomerDetailAndRespond(t *testing.T) {
 					Qty:          7,
 					UOM:          "Nos",
 					PostingDate:  "2026-03-14",
-					Status:       "Draft",
-					DocStatus:    0,
+					Status:       "Submitted",
+					DocStatus:    1,
 				},
 			},
 		},
@@ -1945,7 +1952,7 @@ func TestServerWerkaAndAdminHistoryIncludeCustomerConfirmedResult(t *testing.T) 
 	}
 }
 
-func TestServerCustomerRespondApproveReturnsDetailEvenIfSubmitFails(t *testing.T) {
+func TestServerCustomerRespondApproveReturnsAcceptedForSubmittedDeliveryNote(t *testing.T) {
 	server := NewServer(NewERPAuthenticator(
 		&fakeERPClient{
 			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
@@ -1958,12 +1965,11 @@ func TestServerCustomerRespondApproveReturnsDetailEvenIfSubmitFails(t *testing.T
 					Qty:          12,
 					UOM:          "Kg",
 					PostingDate:  "2026-03-16",
-					Status:       "Draft",
-					DocStatus:    0,
+					Status:       "Submitted",
+					DocStatus:    1,
 				},
 			},
 			comments: map[string][]erpnext.Comment{},
-			submitDeliveryNoteErr: fmt.Errorf("submit failed after comment"),
 		},
 		"http://erp.local",
 		"key",
