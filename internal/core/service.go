@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"html"
 	"regexp"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1908,6 +1908,7 @@ func mapPurchaseReceiptToDispatchRecord(item erpnext.PurchaseReceiptDraft, fallb
 	}
 	return DispatchRecord{
 		ID:           item.Name,
+		RecordType:   "purchase_receipt",
 		SupplierRef:  item.Supplier,
 		SupplierName: supplierName,
 		ItemCode:     item.ItemCode,
@@ -1941,6 +1942,7 @@ func mapDeliveryNoteToDispatchRecord(item erpnext.DeliveryNoteDraft) DispatchRec
 	}
 	return DispatchRecord{
 		ID:           item.Name,
+		RecordType:   "delivery_note",
 		SupplierRef:  item.Customer,
 		SupplierName: item.CustomerName,
 		ItemCode:     item.ItemCode,
