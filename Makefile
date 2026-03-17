@@ -3,10 +3,46 @@ ADDR ?= :8081
 PID_FILE := .core.pid
 LOG_FILE := .core.log
 ENV_FILE := .env
+REPO_ROOT := $(abspath ..)
+PUBLIC_START_SCRIPT := $(REPO_ROOT)/mobile_app/start_domain_core.sh
 
-.PHONY: run stop test fmt tidy
+.PHONY: run run-local stop test fmt tidy
 
 run: stop
+	@echo "Starting core on $(ADDR)"
+	@set -a; \
+	if [ -f "$(ENV_FILE)" ]; then \
+		. "./$(ENV_FILE)"; \
+		echo "Loaded $(ENV_FILE)"; \
+	fi; \
+	set +a; \
+	port="$(ADDR)"; \
+	port="$${port##*:}"; \
+	if ss -ltn "( sport = :$$port )" 2>/dev/null | tail -n +2 | grep -q .; then \
+		echo "Port $$port is still busy; refusing to start"; \
+		ss -ltnp "( sport = :$$port )" || true; \
+		exit 1; \
+	fi; \
+	rm -f "$(LOG_FILE)"; \
+	setsid env MOBILE_API_ADDR="$(ADDR)" go run $(APP) >"$(LOG_FILE)" 2>&1 < /dev/null & \
+	echo $$! >"$(PID_FILE)"; \
+	for _ in $$(seq 1 40); do \
+		if curl -fsS "http://127.0.0.1:$$port/healthz" >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	if ! curl -fsS "http://127.0.0.1:$$port/healthz" >/dev/null 2>&1; then \
+		echo "Core failed to start; see $(LOG_FILE)" >&2; \
+		exit 1; \
+	fi; \
+	if [ -x "$(PUBLIC_START_SCRIPT)" ]; then \
+		CORE_URL="http://127.0.0.1:$$port" BACKEND_ROOT="$(REPO_ROOT)" "$(PUBLIC_START_SCRIPT)"; \
+	else \
+		echo "Core ready at http://127.0.0.1:$$port"; \
+	fi
+
+run-local: stop
 	@echo "Starting core on $(ADDR)"
 	@set -a; \
 	if [ -f "$(ENV_FILE)" ]; then \
