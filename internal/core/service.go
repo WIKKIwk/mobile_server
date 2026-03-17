@@ -1219,7 +1219,7 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
-	result, err := a.erp.CreateAndSubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateDeliveryNoteInput{
+	result, err := a.erp.CreateDraftDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, erpnext.CreateDeliveryNoteInput{
 		Customer:  customer.ID,
 		Company:   company,
 		Warehouse: warehouse,
@@ -1230,7 +1230,7 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
-	_ = a.erp.UpdateDeliveryNoteState(
+	if err := a.erp.UpdateDeliveryNoteState(
 		ctx,
 		a.baseURL,
 		a.apiKey,
@@ -1242,7 +1242,12 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 			CustomerReason: "",
 			DeliveryActor:  strconv.Itoa(deliveryActorWerka),
 		},
-	)
+	); err != nil {
+		return WerkaCustomerIssueRecord{}, err
+	}
+	if err := a.erp.SubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, result.Name); err != nil {
+		return WerkaCustomerIssueRecord{}, err
+	}
 	return WerkaCustomerIssueRecord{
 		EntryID:      result.Name,
 		CustomerRef:  customer.ID,
