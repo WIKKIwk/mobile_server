@@ -859,6 +859,11 @@ func mapPurchaseReceiptDraft(doc map[string]interface{}) (PurchaseReceiptDraft, 
 		uom = getStringValue(firstItem["stock_uom"])
 	}
 
+	qty := getFloatValue(firstItem["qty"])
+	if markerQty, ok := ParseTelegramReceiptMarkerQty(getStringValue(doc["supplier_delivery_note"])); ok && markerQty > qty {
+		qty = markerQty
+	}
+
 	return PurchaseReceiptDraft{
 		Name:                 getStringValue(doc["name"]),
 		DocStatus:            int(getFloatValue(doc["docstatus"])),
@@ -869,7 +874,7 @@ func mapPurchaseReceiptDraft(doc map[string]interface{}) (PurchaseReceiptDraft, 
 		SupplierDeliveryNote: getStringValue(doc["supplier_delivery_note"]),
 		ItemCode:             itemCode,
 		ItemName:             itemName,
-		Qty:                  getFloatValue(firstItem["qty"]),
+		Qty:                  qty,
 		UOM:                  uom,
 		Warehouse:            getStringValue(firstItem["warehouse"]),
 		Amount:               getFloatValue(firstItem["amount"]),
@@ -879,12 +884,12 @@ func mapPurchaseReceiptDraft(doc map[string]interface{}) (PurchaseReceiptDraft, 
 }
 
 const (
-	accordAcceptedLinePrefix = "Accord Qabul:"
-	accordReturnedLinePrefix = "Accord Qaytarildi:"
-	accordReasonLinePrefix   = "Accord Sabab:"
-	accordCommentLinePrefix  = "Accord Izoh:"
-	accordSupplierAckPrefix  = "Accord Supplier Tasdiq:"
-	accordWerkaUnannouncedPrefix = "Accord Werka Aytilmagan:"
+	accordAcceptedLinePrefix           = "Accord Qabul:"
+	accordReturnedLinePrefix           = "Accord Qaytarildi:"
+	accordReasonLinePrefix             = "Accord Sabab:"
+	accordCommentLinePrefix            = "Accord Izoh:"
+	accordSupplierAckPrefix            = "Accord Supplier Tasdiq:"
+	accordWerkaUnannouncedPrefix       = "Accord Werka Aytilmagan:"
 	accordWerkaUnannouncedReasonPrefix = "Accord Werka Aytilmagan Sabab:"
 )
 
