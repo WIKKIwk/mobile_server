@@ -24,12 +24,15 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidRole        = errors.New("invalid role")
 	ErrUnauthorized       = errors.New("unauthorized")
+	ErrInvalidInput       = errors.New("invalid input")
 	htmlTagPattern        = regexp.MustCompile(`<[^>]+>`)
 )
 
 const (
 	supplierAckEventPrefix            = "supplier_ack:"
 	customerDeliveryResultEventPrefix = "customer_delivery_result:"
+	notificationTargetPurchaseReceipt = "purchase_receipt"
+	notificationTargetDeliveryNote    = "delivery_note"
 	deliveryFlowStateNone             = 0
 	deliveryFlowStateSubmitted        = 1
 	deliveryFlowStateReturned         = 2
@@ -1000,26 +1003,12 @@ func shouldHideStaleWerkaDraft(item erpnext.PurchaseReceiptDraft) bool {
 }
 
 func (a *ERPAuthenticator) NotificationDetail(ctx context.Context, principal Principal, receiptID string) (NotificationDetail, error) {
-	trimmedReceiptID := strings.TrimSpace(receiptID)
-	eventType := ""
-	if strings.HasPrefix(trimmedReceiptID, supplierAckEventPrefix) {
-		eventType = "supplier_ack"
-		parts := strings.SplitN(strings.TrimPrefix(trimmedReceiptID, supplierAckEventPrefix), ":", 2)
-		if len(parts) > 0 {
-			trimmedReceiptID = strings.TrimSpace(parts[0])
-		}
+	targetName, targetType, eventType, err := resolveNotificationTarget(receiptID)
+	if err != nil {
+		return NotificationDetail{}, err
 	}
-	if strings.HasPrefix(trimmedReceiptID, customerDeliveryResultEventPrefix) {
-		parts := strings.SplitN(strings.TrimPrefix(trimmedReceiptID, customerDeliveryResultEventPrefix), ":", 2)
-		deliveryNoteID := ""
-		if len(parts) > 0 {
-			deliveryNoteID = strings.TrimSpace(parts[0])
-		}
-		if deliveryNoteID == "" {
-			return NotificationDetail{}, fmt.Errorf("delivery note id is required")
-		}
-
-		draft, err := a.erp.GetDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, deliveryNoteID)
+	if targetType == notificationTargetDeliveryNote {
+		draft, err := a.erp.GetDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName)
 		if err != nil {
 			return NotificationDetail{}, err
 		}
@@ -1068,7 +1057,7 @@ func (a *ERPAuthenticator) NotificationDetail(ctx context.Context, principal Pri
 		}, nil
 	}
 
-	draft, err := a.erp.GetPurchaseReceipt(ctx, a.baseURL, a.apiKey, a.apiSecret, trimmedReceiptID)
+	draft, err := a.erp.GetPurchaseReceipt(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName)
 	if err != nil {
 		return NotificationDetail{}, err
 	}
@@ -1122,18 +1111,29 @@ func (a *ERPAuthenticator) AddNotificationComment(ctx context.Context, principal
 	if trimmedMessage == "" {
 		return NotificationDetail{}, fmt.Errorf("comment is required")
 	}
+	targetName, targetType, _, err := resolveNotificationTarget(receiptID)
+	if err != nil {
+		return NotificationDetail{}, err
+	}
 
-	detail, err := a.NotificationDetail(ctx, principal, receiptID)
+	_, err = a.NotificationDetail(ctx, principal, receiptID)
 	if err != nil {
 		return NotificationDetail{}, err
 	}
 
 	formatted := formatNotificationComment(principal, trimmedMessage)
-	if err := a.erp.AddPurchaseReceiptComment(ctx, a.baseURL, a.apiKey, a.apiSecret, detail.Record.ID, formatted); err != nil {
-		return NotificationDetail{}, err
+	switch targetType {
+	case notificationTargetDeliveryNote:
+		if err := a.erp.AddDeliveryNoteComment(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName, formatted); err != nil {
+			return NotificationDetail{}, err
+		}
+	default:
+		if err := a.erp.AddPurchaseReceiptComment(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName, formatted); err != nil {
+			return NotificationDetail{}, err
+		}
 	}
 	if principal.Role == RoleSupplier && isSupplierAcknowledgmentMessage(trimmedMessage) {
-		draft, err := a.erp.GetPurchaseReceipt(ctx, a.baseURL, a.apiKey, a.apiSecret, detail.Record.ID)
+		draft, err := a.erp.GetPurchaseReceipt(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName)
 		if err != nil {
 			return NotificationDetail{}, err
 		}
@@ -1141,11 +1141,36 @@ func (a *ERPAuthenticator) AddNotificationComment(ctx context.Context, principal
 			draft.Remarks,
 			trimmedMessage,
 		)
-		if err := a.erp.UpdatePurchaseReceiptRemarks(ctx, a.baseURL, a.apiKey, a.apiSecret, detail.Record.ID, remarks); err != nil {
+		if err := a.erp.UpdatePurchaseReceiptRemarks(ctx, a.baseURL, a.apiKey, a.apiSecret, targetName, remarks); err != nil {
 			// Supplier acknowledgment is already stored as a comment; remarks backfill is best-effort.
 		}
 	}
 	return a.NotificationDetail(ctx, principal, receiptID)
+}
+
+func resolveNotificationTarget(receiptID string) (targetName, targetType, eventType string, err error) {
+	trimmedReceiptID := strings.TrimSpace(receiptID)
+	if strings.HasPrefix(trimmedReceiptID, supplierAckEventPrefix) {
+		eventType = "supplier_ack"
+		parts := strings.SplitN(strings.TrimPrefix(trimmedReceiptID, supplierAckEventPrefix), ":", 2)
+		if len(parts) > 0 {
+			trimmedReceiptID = strings.TrimSpace(parts[0])
+		}
+	}
+	if strings.HasPrefix(trimmedReceiptID, customerDeliveryResultEventPrefix) {
+		parts := strings.SplitN(strings.TrimPrefix(trimmedReceiptID, customerDeliveryResultEventPrefix), ":", 2)
+		if len(parts) > 0 {
+			targetName = strings.TrimSpace(parts[0])
+		}
+		if targetName == "" {
+			return "", "", "", fmt.Errorf("delivery note id is required")
+		}
+		return targetName, notificationTargetDeliveryNote, eventType, nil
+	}
+	if trimmedReceiptID == "" {
+		return "", "", "", fmt.Errorf("receipt id is required")
+	}
+	return trimmedReceiptID, notificationTargetPurchaseReceipt, eventType, nil
 }
 
 func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, limit int) ([]SupplierDirectoryEntry, error) {
@@ -1448,6 +1473,9 @@ func (a *ERPAuthenticator) CustomerRespondDelivery(ctx context.Context, principa
 	}
 	if customerDeliveryStatus(draft) != "pending" {
 		return CustomerDeliveryDetail{}, fmt.Errorf("delivery note is not pending")
+	}
+	if !approve && strings.TrimSpace(reason) == "" {
+		return CustomerDeliveryDetail{}, ErrInvalidInput
 	}
 
 	decisionState := strconv.Itoa(customerStateRejected)

@@ -99,11 +99,21 @@ func (s *PushTokenStore) MoveTokenToKey(targetKey, token, platform string) error
 			all[key] = filtered
 		}
 	}
-	all[strings.TrimSpace(targetKey)] = []PushTokenRecord{{
+	trimmedKey := strings.TrimSpace(targetKey)
+	targetRecords := all[trimmedKey]
+	filteredTarget := make([]PushTokenRecord, 0, len(targetRecords)+1)
+	for _, item := range targetRecords {
+		if strings.TrimSpace(item.Token) == trimmedToken {
+			continue
+		}
+		filteredTarget = append(filteredTarget, item)
+	}
+	filteredTarget = append(filteredTarget, PushTokenRecord{
 		Token:     trimmedToken,
 		Platform:  strings.TrimSpace(platform),
 		UpdatedAt: time.Now().UTC(),
-	}}
+	})
+	all[trimmedKey] = filteredTarget
 	return s.writeAllLocked(all)
 }
 

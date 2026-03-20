@@ -414,10 +414,34 @@ func (s *Server) handlePushToken(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
 			return
 		}
-		if err := s.push.MoveTokenToKey(pushTokenKey(principal), req.Token, req.Platform); err != nil {
+		key := pushTokenKey(principal)
+		before, err := s.push.List(key)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token read failed"})
+			return
+		}
+		log.Printf(
+			"push token register requested key=%s token=%s platform=%s existing_count=%d",
+			key,
+			truncateToken(req.Token),
+			strings.TrimSpace(req.Platform),
+			len(before),
+		)
+		if err := s.push.MoveTokenToKey(key, req.Token, req.Platform); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token save failed"})
 			return
 		}
+		after, err := s.push.List(key)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token read failed"})
+			return
+		}
+		log.Printf(
+			"push token register stored key=%s token=%s total_count=%d",
+			key,
+			truncateToken(req.Token),
+			len(after),
+		)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case http.MethodDelete:
 		token := strings.TrimSpace(r.URL.Query().Get("token"))
@@ -425,10 +449,33 @@ func (s *Server) handlePushToken(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
 			return
 		}
-		if err := s.push.Delete(pushTokenKey(principal), token); err != nil {
+		key := pushTokenKey(principal)
+		before, err := s.push.List(key)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token read failed"})
+			return
+		}
+		log.Printf(
+			"push token delete requested key=%s token=%s existing_count=%d",
+			key,
+			truncateToken(token),
+			len(before),
+		)
+		if err := s.push.Delete(key, token); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token delete failed"})
 			return
 		}
+		after, err := s.push.List(key)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "push token read failed"})
+			return
+		}
+		log.Printf(
+			"push token delete stored key=%s token=%s total_count=%d",
+			key,
+			truncateToken(token),
+			len(after),
+		)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -614,14 +661,18 @@ func (s *Server) handleCustomerRespond(w http.ResponseWriter, r *http.Request) {
 		req.Approve,
 		strings.TrimSpace(req.Reason),
 	)
-	if err != nil {
-		if errors.Is(err, ErrUnauthorized) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		if err != nil {
+			if errors.Is(err, ErrUnauthorized) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+				return
+			}
+			if errors.Is(err, ErrInvalidInput) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer respond failed"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer respond failed"})
-		return
-	}
 	if err := s.sender.SendToKey(
 		r.Context(),
 		string(RoleWerka)+":werka",

@@ -14,10 +14,12 @@ type adminSuppliersERPStub struct {
 	getSupplier               func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Supplier, error)
 	getDeliveryNote           func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)
 	listDeliveryNoteComments  func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
+	addDeliveryNoteComment    func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
 	listAssignedSupplierItems func(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error)
 	getItemsByCodes           func(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error)
 	searchWarehouses          func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error)
 	updateSupplierContact     func(ctx context.Context, baseURL, apiKey, apiSecret, id, phone, details string) error
+	addPurchaseReceiptComment func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
 }
 
 func (s *adminSuppliersERPStub) SearchItems(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Item, error) {
@@ -201,6 +203,9 @@ func (s *adminSuppliersERPStub) ListPurchaseReceiptCommentsBatch(ctx context.Con
 }
 
 func (s *adminSuppliersERPStub) AddPurchaseReceiptComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+	if s.addPurchaseReceiptComment != nil {
+		return s.addPurchaseReceiptComment(ctx, baseURL, apiKey, apiSecret, name, content)
+	}
 	return nil
 }
 
@@ -237,6 +242,9 @@ func (s *adminSuppliersERPStub) UpdateDeliveryNoteRemarks(ctx context.Context, b
 }
 
 func (s *adminSuppliersERPStub) AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+	if s.addDeliveryNoteComment != nil {
+		return s.addDeliveryNoteComment(ctx, baseURL, apiKey, apiSecret, name, content)
+	}
 	return nil
 }
 
@@ -358,6 +366,118 @@ func TestNotificationDetailSupportsCustomerDeliveryResultEvents(t *testing.T) {
 	}
 	if detail.Record.ID != customerDeliveryResultEventPrefix+"MAT-DN-0001:COMMENT-1" {
 		t.Fatalf("unexpected record id: %q", detail.Record.ID)
+	}
+}
+
+func TestAddNotificationCommentUsesDeliveryNotePathForCustomerDeliveryResultEvents(t *testing.T) {
+	var (
+		addedDeliveryNoteName string
+		addedPurchaseNoteName string
+	)
+	stub := &adminSuppliersERPStub{
+		getDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error) {
+			return erpnext.DeliveryNoteDraft{
+				Name:                "MAT-DN-0001",
+				Customer:            "CUST-001",
+				CustomerName:        "Comfi",
+				ItemCode:            "ITEM-001",
+				ItemName:            "Chers",
+				Qty:                 3,
+				UOM:                 "Nos",
+				PostingDate:         "2026-03-15",
+				DocStatus:           1,
+				AccordFlowState:     "1",
+				AccordCustomerState: "1",
+			}, nil
+		},
+		listDeliveryNoteComments: func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error) {
+			return []erpnext.Comment{}, nil
+		},
+		addDeliveryNoteComment: func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+			addedDeliveryNoteName = name
+			return nil
+		},
+		addPurchaseReceiptComment: func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
+			addedPurchaseNoteName = name
+			return nil
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Main - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	_, err := auth.AddNotificationComment(
+		context.Background(),
+		Principal{Role: RoleWerka, Ref: "werka"},
+		customerDeliveryResultEventPrefix+"MAT-DN-0001:COMMENT-1",
+		"Qabul bo'ldi deb tasdiqladim",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addedDeliveryNoteName != "MAT-DN-0001" {
+		t.Fatalf("expected delivery note comment target MAT-DN-0001, got %q", addedDeliveryNoteName)
+	}
+	if addedPurchaseNoteName != "" {
+		t.Fatalf("expected purchase receipt comment path to stay unused, got %q", addedPurchaseNoteName)
+	}
+}
+
+func TestCustomerRespondDeliveryRejectRequiresReason(t *testing.T) {
+	stub := &adminSuppliersERPStub{
+		getDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error) {
+			return erpnext.DeliveryNoteDraft{
+				Name:                "MAT-DN-0001",
+				Customer:            "CUST-001",
+				CustomerName:        "Comfi",
+				ItemCode:            "ITEM-001",
+				ItemName:            "Chers",
+				Qty:                 3,
+				UOM:                 "Nos",
+				PostingDate:         "2026-03-15",
+				DocStatus:           1,
+				AccordFlowState:     "1",
+				AccordCustomerState: "0",
+			}, nil
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Main - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	_, err := auth.CustomerRespondDelivery(
+		context.Background(),
+		Principal{Role: RoleCustomer, Ref: "CUST-001"},
+		"MAT-DN-0001",
+		false,
+		"",
+	)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
 	}
 }
 

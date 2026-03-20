@@ -6,6 +6,7 @@ var (
 	ErrInvalidCredentials    = core.ErrInvalidCredentials
 	ErrInvalidRole           = core.ErrInvalidRole
 	ErrUnauthorized          = core.ErrUnauthorized
+	ErrInvalidInput          = core.ErrInvalidInput
 	ErrAdminSupplierNotFound = core.ErrAdminSupplierNotFound
 	ErrCodeRegenCooldown     = core.ErrCodeRegenCooldown
 )
