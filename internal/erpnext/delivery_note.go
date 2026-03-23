@@ -147,6 +147,62 @@ func (c *Client) CreateAndSubmitDeliveryNote(ctx context.Context, baseURL, apiKe
 	return result, nil
 }
 
+func (c *Client) CreateAndSubmitDeliveryNoteReturn(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (DeliveryNoteResult, error) {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return DeliveryNoteResult{}, err
+	}
+
+	makeEndpoint := normalized + "/api/method/erpnext.stock.doctype.delivery_note.delivery_note.make_sales_return?source_name=" + url.QueryEscape(strings.TrimSpace(sourceName))
+	var mapped struct {
+		Message map[string]interface{} `json:"message"`
+	}
+	if err := c.doJSON(ctx, makeEndpoint, apiKey, apiSecret, &mapped); err != nil {
+		return DeliveryNoteResult{}, err
+	}
+	if len(mapped.Message) == 0 {
+		return DeliveryNoteResult{}, fmt.Errorf("delivery note return mapping returned empty document")
+	}
+
+	insertEndpoint := normalized + "/api/method/frappe.client.insert"
+	var inserted struct {
+		Message map[string]interface{} `json:"message"`
+	}
+	if err := c.doJSONRequest(
+		ctx,
+		http.MethodPost,
+		insertEndpoint,
+		apiKey,
+		apiSecret,
+		map[string]interface{}{"doc": mapped.Message},
+		&inserted,
+	); err != nil {
+		return DeliveryNoteResult{}, err
+	}
+	if len(inserted.Message) == 0 {
+		return DeliveryNoteResult{}, fmt.Errorf("delivery note return insert returned empty document")
+	}
+	name := strings.TrimSpace(getStringValue(inserted.Message["name"]))
+	if name == "" {
+		return DeliveryNoteResult{}, fmt.Errorf("delivery note return insert did not return name")
+	}
+
+	submitEndpoint := normalized + "/api/method/frappe.client.submit"
+	if err := c.doJSONRequest(
+		ctx,
+		http.MethodPost,
+		submitEndpoint,
+		apiKey,
+		apiSecret,
+		map[string]interface{}{"doc": inserted.Message},
+		nil,
+	); err != nil {
+		return DeliveryNoteResult{}, err
+	}
+
+	return DeliveryNoteResult{Name: name}, nil
+}
+
 func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, apiKey, apiSecret string) error {
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {

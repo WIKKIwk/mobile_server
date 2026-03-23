@@ -423,6 +423,24 @@ func (f *fakeERPClient) CreateDraftDeliveryNote(_ context.Context, _, _, _ strin
 	return erpnext.DeliveryNoteResult{Name: name}, nil
 }
 
+func (f *fakeERPClient) CreateAndSubmitDeliveryNoteReturn(_ context.Context, _, _, _, sourceName string) (erpnext.DeliveryNoteResult, error) {
+	name := "RET-DN-0001"
+	f.customerDeliveryNotes = append([]erpnext.DeliveryNoteDraft{{
+		Name:          name,
+		Customer:      "comfi",
+		CustomerName:  "comfi",
+		ItemCode:      "pista93784",
+		ItemName:      "pista",
+		Qty:           -1,
+		UOM:           "Kg",
+		PostingDate:   "2026-03-23",
+		Status:        "Return",
+		DocStatus:     1,
+		Remarks:       sourceName,
+	}}, f.customerDeliveryNotes...)
+	return erpnext.DeliveryNoteResult{Name: name}, nil
+}
+
 func (f *fakeERPClient) SubmitDeliveryNote(_ context.Context, _, _, _, name string) error {
 	if f.submitDeliveryNoteErr != nil {
 		return f.submitDeliveryNoteErr

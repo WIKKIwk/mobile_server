@@ -74,6 +74,7 @@ type ERPClient interface {
 	ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
 	ListDeliveryNoteCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]erpnext.Comment, error)
 	AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
+	CreateAndSubmitDeliveryNoteReturn(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error)
 	ListPendingPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListPendingPurchaseReceiptsPage(ctx context.Context, baseURL, apiKey, apiSecret string, limit, offset int) ([]erpnext.PurchaseReceiptDraft, error)
 	ListTelegramPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
@@ -1489,6 +1490,16 @@ func (a *ERPAuthenticator) CustomerRespondDelivery(ctx context.Context, principa
 	decisionState := strconv.Itoa(customerStateRejected)
 	if approve {
 		decisionState = strconv.Itoa(customerStateConfirmed)
+	}
+
+	if _, err := a.erp.CreateAndSubmitDeliveryNoteReturn(
+		ctx,
+		a.baseURL,
+		a.apiKey,
+		a.apiSecret,
+		draft.Name,
+	); err != nil {
+		return CustomerDeliveryDetail{}, err
 	}
 
 	if err := a.erp.UpdateDeliveryNoteState(

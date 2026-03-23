@@ -15,6 +15,7 @@ type adminSuppliersERPStub struct {
 	getDeliveryNote           func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)
 	listDeliveryNoteComments  func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
 	addDeliveryNoteComment    func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
+	createDeliveryNoteReturn  func(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error)
 	listAssignedSupplierItems func(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error)
 	getItemsByCodes           func(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error)
 	searchWarehouses          func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error)
@@ -231,6 +232,13 @@ func (s *adminSuppliersERPStub) CreateAndSubmitDeliveryNote(ctx context.Context,
 
 func (s *adminSuppliersERPStub) CreateDraftDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
 	return erpnext.DeliveryNoteResult{}, nil
+}
+
+func (s *adminSuppliersERPStub) CreateAndSubmitDeliveryNoteReturn(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error) {
+	if s.createDeliveryNoteReturn != nil {
+		return s.createDeliveryNoteReturn(ctx, baseURL, apiKey, apiSecret, sourceName)
+	}
+	return erpnext.DeliveryNoteResult{Name: "RET-DN-0001"}, nil
 }
 
 func (s *adminSuppliersERPStub) SubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
@@ -482,7 +490,7 @@ func TestCustomerRespondDeliveryRejectRequiresReason(t *testing.T) {
 				PostingDate:         "2026-03-15",
 				DocStatus:           1,
 				AccordFlowState:     "1",
-				AccordCustomerState: "0",
+				AccordCustomerState: "1",
 			}, nil
 		},
 	}
@@ -511,6 +519,61 @@ func TestCustomerRespondDeliveryRejectRequiresReason(t *testing.T) {
 	)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestCustomerRespondDeliveryRejectCreatesReturnDeliveryNote(t *testing.T) {
+	var returnAgainst string
+
+	stub := &adminSuppliersERPStub{
+		getDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error) {
+			return erpnext.DeliveryNoteDraft{
+				Name:                "MAT-DN-0001",
+				Customer:            "CUST-001",
+				CustomerName:        "Comfi",
+				ItemCode:            "ITEM-001",
+				ItemName:            "Chers",
+				Qty:                 3,
+				UOM:                 "Nos",
+				PostingDate:         "2026-03-15",
+				DocStatus:           1,
+				AccordFlowState:     "1",
+				AccordCustomerState: "1",
+			}, nil
+		},
+		createDeliveryNoteReturn: func(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error) {
+			returnAgainst = sourceName
+			return erpnext.DeliveryNoteResult{Name: "RET-DN-0001"}, nil
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Main - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	_, err := auth.CustomerRespondDelivery(
+		context.Background(),
+		Principal{Role: RoleCustomer, Ref: "CUST-001"},
+		"MAT-DN-0001",
+		false,
+		"Qabul qilinmadi",
+	)
+	if err != nil {
+		t.Fatalf("CustomerRespondDelivery() error = %v", err)
+	}
+	if returnAgainst != "MAT-DN-0001" {
+		t.Fatalf("expected return against MAT-DN-0001, got %q", returnAgainst)
 	}
 }
 
