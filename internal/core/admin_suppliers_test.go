@@ -435,6 +435,31 @@ func TestAddNotificationCommentUsesDeliveryNotePathForCustomerDeliveryResultEven
 	}
 }
 
+func TestWerkaLoginAcceptsLocalNineDigitConfiguredPhone(t *testing.T) {
+	auth := NewERPAuthenticator(
+		&adminSuppliersERPStub{},
+		"http://erp.test",
+		"key",
+		"secret",
+		"Stores - A",
+		"10",
+		"20",
+		"20ABCDEF1234",
+		"888862440",
+		"Werka",
+		nil,
+		nil,
+	)
+
+	principal, err := auth.Login(context.Background(), "+99888862440", "20ABCDEF1234")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if principal.Role != RoleWerka {
+		t.Fatalf("expected werka role, got %q", principal.Role)
+	}
+}
+
 func TestCustomerRespondDeliveryRejectRequiresReason(t *testing.T) {
 	stub := &adminSuppliersERPStub{
 		getDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error) {

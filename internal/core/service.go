@@ -188,7 +188,7 @@ func NewERPAuthenticator(
 }
 
 func (a *ERPAuthenticator) SetAdminIdentity(phone, name, code string, envPersister EnvPersister) {
-	normalizedPhone, err := suplier.NormalizePhone(phone)
+	normalizedPhone, err := normalizeConfigPhone(phone)
 	if err == nil {
 		a.adminPhone = normalizedPhone
 	} else {
@@ -306,7 +306,7 @@ func (a *ERPAuthenticator) Login(ctx context.Context, phone, code string) (Princ
 	case RoleWerka:
 		if code == a.werkaCode && code != "" {
 			if a.werkaPhone != "" {
-				expectedWerkaPhone, err := suplier.NormalizePhone(a.werkaPhone)
+				expectedWerkaPhone, err := normalizeConfigPhone(a.werkaPhone)
 				if err != nil {
 					return Principal{}, ErrInvalidCredentials
 				}
@@ -1818,6 +1818,17 @@ func (a *ERPAuthenticator) nowUTC() time.Time {
 
 func currentTimestampLabel() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func normalizeConfigPhone(phone string) (string, error) {
+	cleanPhone := strings.NewReplacer(" ", "", "-", "", "(", "", ")", "").Replace(phone)
+	if !strings.HasPrefix(strings.TrimSpace(cleanPhone), "+") {
+		digitsOnly := cleanPhone
+		if len(digitsOnly) == 9 {
+			cleanPhone = "998" + digitsOnly
+		}
+	}
+	return suplier.NormalizePhone(cleanPhone)
 }
 
 func (a *ERPAuthenticator) cachedWarehouse() string {
