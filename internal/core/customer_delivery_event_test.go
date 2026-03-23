@@ -18,7 +18,7 @@ func TestBuildCustomerDeliveryResultEventAccepted(t *testing.T) {
 		PostingDate:  "2026-03-14",
 		DocStatus:    1,
 		AccordFlowState:    "1",
-		AccordCustomerState: "1",
+		AccordCustomerState: "3",
 	}
 
 	record, ok := buildCustomerDeliveryResultEvent(item)

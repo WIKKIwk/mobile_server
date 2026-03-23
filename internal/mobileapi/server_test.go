@@ -1205,7 +1205,7 @@ func TestServerWerkaSummaryIncludesCustomerDeliveryNotes(t *testing.T) {
 					DocStatus:            1,
 					Status:               "To Bill",
 					AccordFlowState:      "1",
-					AccordCustomerState:  "1",
+					AccordCustomerState:  "3",
 					AccordDeliveryActor:  "1",
 				},
 				{
@@ -1967,7 +1967,7 @@ func TestServerCustomerSummaryAndHistory(t *testing.T) {
 					Status:       "Submitted",
 					DocStatus:    1,
 					AccordFlowState:    "1",
-					AccordCustomerState: "1",
+					AccordCustomerState: "3",
 				},
 				{
 					Name:         "MAT-DN-0003",
@@ -2197,7 +2197,7 @@ func TestServerWerkaAndAdminHistoryIncludeCustomerConfirmedResult(t *testing.T) 
 					Status:       "Submitted",
 					DocStatus:    1,
 					AccordFlowState:    "1",
-					AccordCustomerState: "1",
+					AccordCustomerState: "3",
 				},
 				{
 					Name:         "MAT-DN-0012",

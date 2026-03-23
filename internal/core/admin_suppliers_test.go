@@ -319,7 +319,7 @@ func TestNotificationDetailSupportsCustomerDeliveryResultEvents(t *testing.T) {
 				PostingDate:  "2026-03-15",
 				DocStatus:    1,
 				AccordFlowState:    "1",
-				AccordCustomerState: "1",
+				AccordCustomerState: "3",
 			}, nil
 		},
 		listDeliveryNoteComments: func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error) {
@@ -387,7 +387,7 @@ func TestAddNotificationCommentUsesDeliveryNotePathForCustomerDeliveryResultEven
 				PostingDate:         "2026-03-15",
 				DocStatus:           1,
 				AccordFlowState:     "1",
-				AccordCustomerState: "1",
+				AccordCustomerState: "3",
 			}, nil
 		},
 		listDeliveryNoteComments: func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error) {
