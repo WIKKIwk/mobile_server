@@ -955,11 +955,34 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
+	log.Printf(
+		"werka customer issue create requested by=%s customer=%s item=%s qty=%.4f",
+		strings.TrimSpace(principal.Ref),
+		strings.TrimSpace(req.CustomerRef),
+		strings.TrimSpace(req.ItemCode),
+		req.Qty,
+	)
 	record, err := s.auth.CreateWerkaCustomerIssue(r.Context(), principal, req.CustomerRef, req.ItemCode, req.Qty)
 	if err != nil {
+		log.Printf(
+			"werka customer issue create failed by=%s customer=%s item=%s qty=%.4f err=%v",
+			strings.TrimSpace(principal.Ref),
+			strings.TrimSpace(req.CustomerRef),
+			strings.TrimSpace(req.ItemCode),
+			req.Qty,
+			err,
+		)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer issue create failed"})
 		return
 	}
+	log.Printf(
+		"werka customer issue create succeeded by=%s customer=%s item=%s qty=%.4f delivery_note=%s",
+		strings.TrimSpace(principal.Ref),
+		strings.TrimSpace(record.CustomerRef),
+		strings.TrimSpace(record.ItemCode),
+		record.Qty,
+		strings.TrimSpace(record.EntryID),
+	)
 	if err := s.sender.SendToKey(
 		r.Context(),
 		string(RoleCustomer)+":"+strings.TrimSpace(record.CustomerRef),
