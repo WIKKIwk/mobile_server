@@ -20,10 +20,17 @@ type Server struct {
 }
 
 func NewServer(auth *ERPAuthenticator) *Server {
+	return NewServerWithSessionManager(auth, nil)
+}
+
+func NewServerWithSessionManager(auth *ERPAuthenticator, sessions *SessionManager) *Server {
 	pushStore := NewPushTokenStore("data/mobile_push_tokens.json")
+	if sessions == nil {
+		sessions = NewSessionManager()
+	}
 	return &Server{
 		auth:     auth,
-		sessions: NewSessionManager(),
+		sessions: sessions,
 		push:     pushStore,
 		sender:   newPushSender(pushStore),
 	}
@@ -58,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/suppliers", s.handleWerkaSuppliers)
 	mux.HandleFunc("/v1/mobile/werka/supplier-items", s.handleWerkaSupplierItems)
 	mux.HandleFunc("/v1/mobile/werka/customer-items", s.handleWerkaCustomerItems)
+	mux.HandleFunc("/v1/mobile/werka/customer-item-options", s.handleWerkaCustomerItemOptions)
 	mux.HandleFunc("/v1/mobile/werka/customer-issue/create", s.handleWerkaCustomerIssueCreate)
 	mux.HandleFunc("/v1/mobile/werka/unannounced/create", s.handleWerkaUnannouncedCreate)
 	mux.HandleFunc("/v1/mobile/werka/status-breakdown", s.handleWerkaStatusBreakdown)
@@ -663,18 +671,18 @@ func (s *Server) handleCustomerRespond(w http.ResponseWriter, r *http.Request) {
 		req.Approve,
 		strings.TrimSpace(req.Reason),
 	)
-		if err != nil {
-			if errors.Is(err, ErrUnauthorized) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-				return
-			}
-			if errors.Is(err, ErrInvalidInput) {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer respond failed"})
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 			return
 		}
+		if errors.Is(err, ErrInvalidInput) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer respond failed"})
+		return
+	}
 	if err := s.sender.SendToKey(
 		r.Context(),
 		string(RoleWerka)+":werka",
@@ -932,6 +940,24 @@ func (s *Server) handleWerkaCustomerItems(w http.ResponseWriter, r *http.Request
 	items, err := s.auth.WerkaCustomerItems(r.Context(), customerRef, query, 100)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer items failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleWerkaCustomerItemOptions(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, err := s.auth.WerkaCustomerItemOptions(r.Context(), query, 200)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer item options failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, items)

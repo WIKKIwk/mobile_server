@@ -21,6 +21,7 @@ type NotificationDetail = core.NotificationDetail
 type SupplierItem = core.SupplierItem
 type SupplierDirectoryEntry = core.SupplierDirectoryEntry
 type CustomerDirectoryEntry = core.CustomerDirectoryEntry
+type CustomerItemOption = core.CustomerItemOption
 type SupplierHomeSummary = core.SupplierHomeSummary
 type CustomerHomeSummary = core.CustomerHomeSummary
 type CustomerDeliveryDetail = core.CustomerDeliveryDetail

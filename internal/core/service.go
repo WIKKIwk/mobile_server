@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
-	"regexp"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1214,6 +1216,70 @@ func (a *ERPAuthenticator) WerkaCustomerItems(ctx context.Context, customerRef, 
 	return a.mapSupplierItems(ctx, items)
 }
 
+func (a *ERPAuthenticator) WerkaCustomerItemOptions(ctx context.Context, query string, limit int) ([]CustomerItemOption, error) {
+	customers, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, "", 200)
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+	result := make([]CustomerItemOption, 0, 64)
+	seen := make(map[string]struct{})
+
+	for _, customer := range customers {
+		itemQuery := strings.TrimSpace(query)
+		if normalizedQuery != "" {
+			customerMatches := strings.Contains(strings.ToLower(strings.TrimSpace(customer.Name)), normalizedQuery) ||
+				strings.Contains(strings.ToLower(strings.TrimSpace(customer.Phone)), normalizedQuery) ||
+				strings.Contains(strings.ToLower(strings.TrimSpace(customer.ID)), normalizedQuery)
+			if customerMatches {
+				itemQuery = ""
+			}
+		}
+
+		items, err := a.erp.ListCustomerItems(ctx, a.baseURL, a.apiKey, a.apiSecret, customer.ID, itemQuery, limit)
+		if err != nil {
+			return nil, err
+		}
+		mapped, err := a.mapSupplierItems(ctx, items)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range mapped {
+			key := strings.TrimSpace(customer.ID) + "|" + strings.TrimSpace(item.Code)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			result = append(result, CustomerItemOption{
+				CustomerRef:   strings.TrimSpace(customer.ID),
+				CustomerName:  strings.TrimSpace(customer.Name),
+				CustomerPhone: strings.TrimSpace(customer.Phone),
+				ItemCode:      strings.TrimSpace(item.Code),
+				ItemName:      strings.TrimSpace(item.Name),
+				UOM:           strings.TrimSpace(item.UOM),
+				Warehouse:     strings.TrimSpace(item.Warehouse),
+			})
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		leftItem := strings.ToLower(result[i].ItemName)
+		rightItem := strings.ToLower(result[j].ItemName)
+		if leftItem != rightItem {
+			return leftItem < rightItem
+		}
+		leftCustomer := strings.ToLower(result[i].CustomerName)
+		rightCustomer := strings.ToLower(result[j].CustomerName)
+		if leftCustomer != rightCustomer {
+			return leftCustomer < rightCustomer
+		}
+		return strings.ToLower(result[i].ItemCode) < strings.ToLower(result[j].ItemCode)
+	})
+
+	return result, nil
+}
+
 func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, principal Principal, customerRef, itemCode string, qty float64) (WerkaCustomerIssueRecord, error) {
 	if principal.Role != RoleWerka {
 		return WerkaCustomerIssueRecord{}, ErrUnauthorized
@@ -1887,13 +1953,31 @@ func (a *ERPAuthenticator) setCachedCompany(company string) {
 }
 
 type SessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]Principal
+	mu       sync.Mutex
+	sessions map[string]sessionRecord
+	path     string
+	ttl      time.Duration
+	loaded   bool
+}
+
+type sessionRecord struct {
+	Principal Principal `json:"principal"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
 }
 
 func NewSessionManager() *SessionManager {
 	return &SessionManager{
-		sessions: make(map[string]Principal),
+		sessions: make(map[string]sessionRecord),
+	}
+}
+
+func NewPersistentSessionManager(path string, ttl time.Duration) *SessionManager {
+	return &SessionManager{
+		sessions: make(map[string]sessionRecord),
+		path:     strings.TrimSpace(path),
+		ttl:      ttl,
 	}
 }
 
@@ -1906,30 +1990,179 @@ func (m *SessionManager) Create(principal Principal) (string, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sessions[token] = principal
+
+	all, err := m.loadAllLocked()
+	if err != nil {
+		return "", err
+	}
+	all[token] = m.newSessionRecord(principal, time.Now().UTC(), time.Time{})
+	if err := m.writeAllLocked(all); err != nil {
+		return "", err
+	}
 	return token, nil
 }
 
 func (m *SessionManager) Get(token string) (Principal, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	principal, ok := m.sessions[token]
-	return principal, ok
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	all, err := m.loadAllLocked()
+	if err != nil {
+		return Principal{}, false
+	}
+	record, ok := all[token]
+	if !ok {
+		return Principal{}, false
+	}
+	if m.isExpired(record, time.Now().UTC()) {
+		delete(all, token)
+		_ = m.writeAllLocked(all)
+		return Principal{}, false
+	}
+	return record.Principal, true
 }
 
 func (m *SessionManager) Delete(token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.sessions, token)
+
+	all, err := m.loadAllLocked()
+	if err != nil {
+		return
+	}
+	if _, ok := all[token]; !ok {
+		return
+	}
+	delete(all, token)
+	_ = m.writeAllLocked(all)
 }
 
 func (m *SessionManager) Update(token string, principal Principal) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.sessions[token]; !ok {
+
+	all, err := m.loadAllLocked()
+	if err != nil {
 		return
 	}
-	m.sessions[token] = principal
+	record, ok := all[token]
+	if !ok {
+		return
+	}
+	all[token] = m.newSessionRecord(principal, time.Now().UTC(), record.CreatedAt)
+	_ = m.writeAllLocked(all)
+}
+
+func (m *SessionManager) newSessionRecord(principal Principal, now, createdAt time.Time) sessionRecord {
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	record := sessionRecord{
+		Principal: principal,
+		CreatedAt: createdAt,
+		UpdatedAt: now,
+	}
+	if m.ttl > 0 {
+		record.ExpiresAt = now.Add(m.ttl)
+	}
+	return record
+}
+
+func (m *SessionManager) isExpired(record sessionRecord, now time.Time) bool {
+	return !record.ExpiresAt.IsZero() && now.After(record.ExpiresAt)
+}
+
+func (m *SessionManager) loadAllLocked() (map[string]sessionRecord, error) {
+	if m.loaded {
+		if m.sessions == nil {
+			m.sessions = map[string]sessionRecord{}
+		}
+		return m.sessions, nil
+	}
+
+	all, err := m.readAllLocked()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	for token, record := range all {
+		if m.isExpired(record, now) {
+			delete(all, token)
+		}
+	}
+	m.sessions = all
+	m.loaded = true
+	return m.sessions, nil
+}
+
+func (m *SessionManager) readAllLocked() (map[string]sessionRecord, error) {
+	if m.path == "" {
+		return map[string]sessionRecord{}, nil
+	}
+	if _, err := os.Stat(m.path); err != nil {
+		if os.IsNotExist(err) {
+			return map[string]sessionRecord{}, nil
+		}
+		return nil, err
+	}
+
+	raw, err := os.ReadFile(m.path)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return map[string]sessionRecord{}, nil
+	}
+
+	var data map[string]sessionRecord
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, err
+	}
+	if data == nil {
+		data = map[string]sessionRecord{}
+	}
+	return data, nil
+}
+
+func (m *SessionManager) writeAllLocked(data map[string]sessionRecord) error {
+	m.sessions = cloneSessionRecordMap(data)
+	m.loaded = true
+	if m.path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
+		return err
+	}
+
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(m.path), "sessions-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, m.path); err != nil {
+		return err
+	}
+	return nil
+}
+
+func cloneSessionRecordMap(input map[string]sessionRecord) map[string]sessionRecord {
+	cloned := make(map[string]sessionRecord, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func RequireRole(principal Principal, role PrincipalRole) error {
@@ -2113,14 +2346,14 @@ func parseNotificationComment(content string) (string, string) {
 	if len(lines) >= 2 {
 		head := strings.TrimSpace(lines[0])
 		body := strings.TrimSpace(strings.Join(lines[1:], "\n"))
-			if body != "" &&
-				(strings.HasPrefix(head, "Supplier") ||
-					strings.HasPrefix(head, "Werka") ||
-					strings.HasPrefix(head, "Customer") ||
-					strings.HasPrefix(head, "Admin")) {
-				return head, body
-			}
+		if body != "" &&
+			(strings.HasPrefix(head, "Supplier") ||
+				strings.HasPrefix(head, "Werka") ||
+				strings.HasPrefix(head, "Customer") ||
+				strings.HasPrefix(head, "Admin")) {
+			return head, body
 		}
+	}
 	return "Tizim", trimmed
 }
 

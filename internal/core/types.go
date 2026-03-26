@@ -84,6 +84,16 @@ type CustomerDirectoryEntry struct {
 	Phone string `json:"phone"`
 }
 
+type CustomerItemOption struct {
+	CustomerRef   string `json:"customer_ref"`
+	CustomerName  string `json:"customer_name"`
+	CustomerPhone string `json:"customer_phone"`
+	ItemCode      string `json:"item_code"`
+	ItemName      string `json:"item_name"`
+	UOM           string `json:"uom"`
+	Warehouse     string `json:"warehouse"`
+}
+
 type CustomerHomeSummary struct {
 	PendingCount   int `json:"pending_count"`
 	ConfirmedCount int `json:"confirmed_count"`
