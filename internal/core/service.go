@@ -1706,9 +1706,9 @@ func customerDeliveryUIStatus(flowState, customerState int) string {
 	switch customerState {
 	case customerStateConfirmed:
 		return "confirm"
-	case customerStateRejected:
-		return "rejected"
 	case customerStatePartial:
+		return "partial"
+	case customerStateRejected:
 		return "rejected"
 	default:
 		return "pending"

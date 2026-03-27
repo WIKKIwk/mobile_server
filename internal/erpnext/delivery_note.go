@@ -256,7 +256,7 @@ func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, api
 		{"accord_customer_reason", "Accord Customer Reason", "Small Text", "accord_customer_state", "", 1},
 		{"accord_delivery_actor", "Accord Delivery Actor", "Data", "accord_customer_reason", "", 1},
 		{"accord_status_section", "Accord Status", "Section Break", "posting_time", "", 0},
-		{"accord_ui_status", "Accord UI Status", "Select", "accord_status_section", "pending\nconfirm\nrejected", 0},
+		{"accord_ui_status", "Accord UI Status", "Select", "accord_status_section", "pending\nconfirm\npartial\nrejected", 0},
 	}
 	filtersJSON, _ := json.Marshal([][]interface{}{
 		{"dt", "=", "Delivery Note"},
@@ -270,11 +270,12 @@ func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, api
 		}},
 	})
 	params := url.Values{}
-	params.Set("fields", `["fieldname"]`)
+	params.Set("fields", `["name","fieldname"]`)
 	params.Set("filters", string(filtersJSON))
 	params.Set("limit_page_length", "20")
 	var payload struct {
 		Data []struct {
+			Name      string `json:"name"`
 			Fieldname string `json:"fieldname"`
 		} `json:"data"`
 	}
@@ -282,12 +283,26 @@ func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, api
 	if err := c.doJSON(ctx, endpoint, apiKey, apiSecret, &payload); err != nil {
 		return err
 	}
-	existing := map[string]struct{}{}
+	existing := map[string]string{}
 	for _, row := range payload.Data {
-		existing[strings.TrimSpace(row.Fieldname)] = struct{}{}
+		existing[strings.TrimSpace(row.Fieldname)] = strings.TrimSpace(row.Name)
 	}
 	for _, field := range required {
-		if _, ok := existing[field.fieldname]; ok {
+		if existingName, ok := existing[field.fieldname]; ok {
+			updateEndpoint := normalized + "/api/resource/Custom%20Field/" + url.PathEscape(existingName)
+			body := map[string]interface{}{
+				"label":           field.label,
+				"fieldtype":       field.fieldtype,
+				"insert_after":    field.insertAfter,
+				"hidden":          field.hidden,
+				"read_only":       1,
+				"allow_on_submit": 1,
+				"no_copy":         1,
+				"options":         field.options,
+			}
+			if err := c.doJSONRequest(ctx, http.MethodPut, updateEndpoint, apiKey, apiSecret, body, nil); err != nil {
+				return err
+			}
 			continue
 		}
 		createEndpoint := normalized + "/api/resource/Custom%20Field"
