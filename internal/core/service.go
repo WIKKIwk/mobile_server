@@ -27,6 +27,7 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidRole        = errors.New("invalid role")
+	ErrInsufficientStock  = errors.New("insufficient stock")
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrInvalidInput       = errors.New("invalid input")
 	htmlTagPattern        = regexp.MustCompile(`<[^>]+>`)
@@ -80,6 +81,7 @@ type ERPClient interface {
 	ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
 	ListDeliveryNoteCommentsBatch(ctx context.Context, baseURL, apiKey, apiSecret string, names []string, limit int) (map[string][]erpnext.Comment, error)
 	AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
+	DeleteDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error
 	CreateAndSubmitDeliveryNoteReturn(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error)
 	CreateAndSubmitPartialDeliveryNoteReturn(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string, returnedQty float64) (erpnext.DeliveryNoteResult, error)
 	ListPendingPurchaseReceipts(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.PurchaseReceiptDraft, error)
@@ -1356,6 +1358,11 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
+	cleanupDraft := func() {
+		if cleanupErr := a.erp.DeleteDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, result.Name); cleanupErr != nil {
+			// Best-effort cleanup. The original submit/update error should be returned.
+		}
+	}
 	if err := a.erp.UpdateDeliveryNoteState(
 		ctx,
 		a.baseURL,
@@ -1370,9 +1377,14 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 			UIStatus:       customerDeliveryUIStatus(deliveryFlowStateSubmitted, customerStatePending),
 		},
 	); err != nil {
+		cleanupDraft()
 		return WerkaCustomerIssueRecord{}, err
 	}
 	if err := a.erp.SubmitDeliveryNote(ctx, a.baseURL, a.apiKey, a.apiSecret, result.Name); err != nil {
+		cleanupDraft()
+		if isERPNegativeStockError(err) {
+			return WerkaCustomerIssueRecord{}, ErrInsufficientStock
+		}
 		return WerkaCustomerIssueRecord{}, err
 	}
 	return WerkaCustomerIssueRecord{
@@ -1898,6 +1910,10 @@ func combineCustomerReasonAndComment(reason, comment string) string {
 	default:
 		return trimmedReason + ". " + trimmedComment
 	}
+}
+
+func isERPNegativeStockError(err error) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(err.Error())), "negativestockerror")
 }
 
 func deliveryFlowStateValue(item erpnext.DeliveryNoteDraft) int {

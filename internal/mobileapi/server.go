@@ -999,6 +999,13 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 			req.Qty,
 			err,
 		)
+		if errors.Is(err, ErrInsufficientStock) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error":      "insufficient stock",
+				"error_code": "insufficient_stock",
+			})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer issue create failed"})
 		return
 	}

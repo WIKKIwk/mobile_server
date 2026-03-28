@@ -51,3 +51,5 @@ type AdminSupplierPhoneUpdateRequest = core.AdminSupplierPhoneUpdateRequest
 type AdminSupplierItemsUpdateRequest = core.AdminSupplierItemsUpdateRequest
 type AdminSupplierItemMutationRequest = core.AdminSupplierItemMutationRequest
 type AdminCreateItemRequest = core.AdminCreateItemRequest
+
+var ErrInsufficientStock = core.ErrInsufficientStock

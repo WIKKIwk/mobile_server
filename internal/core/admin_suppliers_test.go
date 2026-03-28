@@ -12,13 +12,20 @@ import (
 type adminSuppliersERPStub struct {
 	searchSuppliers             func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Supplier, error)
 	getSupplier                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Supplier, error)
+	getCustomer                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error)
+	listCustomerItems           func(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error)
 	getDeliveryNote             func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)
 	listDeliveryNoteComments    func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
 	addDeliveryNoteComment      func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
+	createDraftDeliveryNote     func(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error)
+	updateDeliveryNoteState     func(ctx context.Context, baseURL, apiKey, apiSecret, name string, update erpnext.DeliveryNoteStateUpdate) error
+	submitDeliveryNote          func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error
+	deleteDeliveryNote          func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error
 	createDeliveryNoteReturn    func(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string) (erpnext.DeliveryNoteResult, error)
 	createPartialDeliveryReturn func(ctx context.Context, baseURL, apiKey, apiSecret, sourceName string, returnedQty float64) (erpnext.DeliveryNoteResult, error)
 	listAssignedSupplierItems   func(ctx context.Context, baseURL, apiKey, apiSecret, supplier string, limit int) ([]erpnext.Item, error)
 	getItemsByCodes             func(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error)
+	searchCompanies             func(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error)
 	searchWarehouses            func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error)
 	updateSupplierContact       func(ctx context.Context, baseURL, apiKey, apiSecret, id, phone, details string) error
 	addPurchaseReceiptComment   func(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error
@@ -33,10 +40,16 @@ func (s *adminSuppliersERPStub) SearchCustomers(ctx context.Context, baseURL, ap
 }
 
 func (s *adminSuppliersERPStub) SearchCompanies(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error) {
+	if s.searchCompanies != nil {
+		return s.searchCompanies(ctx, baseURL, apiKey, apiSecret, limit)
+	}
 	return nil, nil
 }
 
 func (s *adminSuppliersERPStub) GetCustomer(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error) {
+	if s.getCustomer != nil {
+		return s.getCustomer(ctx, baseURL, apiKey, apiSecret, id)
+	}
 	return erpnext.Customer{}, nil
 }
 
@@ -108,6 +121,9 @@ func (s *adminSuppliersERPStub) SearchSupplierItems(ctx context.Context, baseURL
 }
 
 func (s *adminSuppliersERPStub) ListCustomerItems(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error) {
+	if s.listCustomerItems != nil {
+		return s.listCustomerItems(ctx, baseURL, apiKey, apiSecret, customerRef, query, limit)
+	}
 	return nil, nil
 }
 
@@ -146,6 +162,9 @@ func (s *adminSuppliersERPStub) EnsureDeliveryNoteStateFields(ctx context.Contex
 }
 
 func (s *adminSuppliersERPStub) UpdateDeliveryNoteState(ctx context.Context, baseURL, apiKey, apiSecret, name string, update erpnext.DeliveryNoteStateUpdate) error {
+	if s.updateDeliveryNoteState != nil {
+		return s.updateDeliveryNoteState(ctx, baseURL, apiKey, apiSecret, name, update)
+	}
 	return nil
 }
 
@@ -236,6 +255,9 @@ func (s *adminSuppliersERPStub) CreateAndSubmitDeliveryNote(ctx context.Context,
 }
 
 func (s *adminSuppliersERPStub) CreateDraftDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+	if s.createDraftDeliveryNote != nil {
+		return s.createDraftDeliveryNote(ctx, baseURL, apiKey, apiSecret, input)
+	}
 	return erpnext.DeliveryNoteResult{}, nil
 }
 
@@ -254,6 +276,9 @@ func (s *adminSuppliersERPStub) CreateAndSubmitPartialDeliveryNoteReturn(ctx con
 }
 
 func (s *adminSuppliersERPStub) SubmitDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+	if s.submitDeliveryNote != nil {
+		return s.submitDeliveryNote(ctx, baseURL, apiKey, apiSecret, name)
+	}
 	return nil
 }
 
@@ -264,6 +289,13 @@ func (s *adminSuppliersERPStub) UpdateDeliveryNoteRemarks(ctx context.Context, b
 func (s *adminSuppliersERPStub) AddDeliveryNoteComment(ctx context.Context, baseURL, apiKey, apiSecret, name, content string) error {
 	if s.addDeliveryNoteComment != nil {
 		return s.addDeliveryNoteComment(ctx, baseURL, apiKey, apiSecret, name, content)
+	}
+	return nil
+}
+
+func (s *adminSuppliersERPStub) DeleteDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+	if s.deleteDeliveryNote != nil {
+		return s.deleteDeliveryNote(ctx, baseURL, apiKey, apiSecret, name)
 	}
 	return nil
 }
@@ -776,6 +808,67 @@ func TestCustomerClaimAfterAcceptCreatesReturnDeliveryNote(t *testing.T) {
 	}
 	if detail.Record.AcceptedQty != 8 {
 		t.Fatalf("expected accepted qty 8 after claim, got %+v", detail.Record)
+	}
+}
+
+func TestCreateWerkaCustomerIssueMapsNegativeStockAndDeletesDraft(t *testing.T) {
+	var deletedName string
+
+	stub := &adminSuppliersERPStub{
+		getCustomer: func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error) {
+			return erpnext.Customer{ID: "comfi", Name: "comfi"}, nil
+		},
+		listCustomerItems: func(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error) {
+			return []erpnext.Item{{Code: "pista93784", Name: "pista", UOM: "Kg"}}, nil
+		},
+		getItemsByCodes: func(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error) {
+			return []erpnext.Item{{Code: "pista93784", Name: "pista", UOM: "Kg"}}, nil
+		},
+		searchWarehouses: func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error) {
+			return []erpnext.Warehouse{{Name: "Stores - A"}}, nil
+		},
+		searchCompanies: func(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error) {
+			return []erpnext.Company{{Name: "Main Company"}}, nil
+		},
+		createDraftDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+			return erpnext.DeliveryNoteResult{Name: "MAT-DN-DRAFT-1"}, nil
+		},
+		submitDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+			return errors.New(`status 417: {"exception":"erpnext.stock.stock_ledger.NegativeStockError"}`)
+		},
+		deleteDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+			deletedName = name
+			return nil
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Stores - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	_, err := auth.CreateWerkaCustomerIssue(
+		context.Background(),
+		Principal{Role: RoleWerka, Ref: "werka"},
+		"comfi",
+		"pista93784",
+		9,
+	)
+	if !errors.Is(err, ErrInsufficientStock) {
+		t.Fatalf("expected ErrInsufficientStock, got %v", err)
+	}
+	if deletedName != "MAT-DN-DRAFT-1" {
+		t.Fatalf("expected draft cleanup, got %q", deletedName)
 	}
 }
 

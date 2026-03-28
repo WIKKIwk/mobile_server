@@ -404,6 +404,15 @@ func (c *Client) UpdateDeliveryNoteRemarks(ctx context.Context, baseURL, apiKey,
 	}, nil)
 }
 
+func (c *Client) DeleteDeliveryNote(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+	normalized, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	endpoint := normalized + "/api/resource/Delivery%20Note/" + url.PathEscape(strings.TrimSpace(name))
+	return c.doJSONRequest(ctx, http.MethodDelete, endpoint, apiKey, apiSecret, nil, nil)
+}
+
 func (c *Client) ListDeliveryNoteComments(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]Comment, error) {
 	itemsByName, err := c.ListDeliveryNoteCommentsBatch(ctx, baseURL, apiKey, apiSecret, []string{name}, limit)
 	if err != nil {
