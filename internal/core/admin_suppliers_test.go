@@ -10,6 +10,7 @@ import (
 )
 
 type adminSuppliersERPStub struct {
+	searchCustomers             func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Customer, error)
 	searchSuppliers             func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Supplier, error)
 	getSupplier                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Supplier, error)
 	getCustomer                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error)
@@ -36,6 +37,9 @@ func (s *adminSuppliersERPStub) SearchItems(ctx context.Context, baseURL, apiKey
 }
 
 func (s *adminSuppliersERPStub) SearchCustomers(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Customer, error) {
+	if s.searchCustomers != nil {
+		return s.searchCustomers(ctx, baseURL, apiKey, apiSecret, query, limit)
+	}
 	return nil, nil
 }
 

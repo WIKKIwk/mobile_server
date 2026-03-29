@@ -1200,17 +1200,44 @@ func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, limit int) ([]Sup
 }
 
 func (a *ERPAuthenticator) WerkaCustomers(ctx context.Context, query string, limit int) ([]CustomerDirectoryEntry, error) {
-	items, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, query, limit)
+	searchLimit := limit
+	if searchLimit <= 0 {
+		searchLimit = 100
+	}
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		searchLimit *= 4
+	} else {
+		searchLimit = 500
+	}
+	if searchLimit > 500 {
+		searchLimit = 500
+	}
+
+	items, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, query, searchLimit)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]CustomerDirectoryEntry, 0, len(items))
 	for _, item := range items {
+		customerRef := strings.TrimSpace(item.ID)
+		if customerRef == "" {
+			continue
+		}
+		assigned, err := a.erp.ListCustomerItems(ctx, a.baseURL, a.apiKey, a.apiSecret, customerRef, "", 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(assigned) == 0 {
+			continue
+		}
 		result = append(result, CustomerDirectoryEntry{
-			Ref:   item.ID,
+			Ref:   customerRef,
 			Name:  item.Name,
 			Phone: item.Phone,
 		})
+		if limit > 0 && len(result) >= limit {
+			break
+		}
 	}
 	return result, nil
 }
