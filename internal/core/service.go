@@ -646,7 +646,10 @@ func (a *ERPAuthenticator) WerkaSummary(ctx context.Context) (WerkaHomeSummary, 
 
 func (a *ERPAuthenticator) WerkaStatusBreakdown(ctx context.Context, kind string) ([]WerkaStatusBreakdownEntry, error) {
 	if a.reader != nil {
-		return a.reader.WerkaStatusBreakdown(ctx, kind)
+		items, err := a.reader.WerkaStatusBreakdown(ctx, kind)
+		if err == nil {
+			return items, nil
+		}
 	}
 	items, err := a.collectTelegramPurchaseReceipts(ctx)
 	if err != nil {
@@ -732,7 +735,10 @@ func (a *ERPAuthenticator) WerkaStatusBreakdown(ctx context.Context, kind string
 
 func (a *ERPAuthenticator) WerkaStatusDetails(ctx context.Context, kind, supplierRef string) ([]DispatchRecord, error) {
 	if a.reader != nil {
-		return a.reader.WerkaStatusDetails(ctx, kind, supplierRef)
+		items, err := a.reader.WerkaStatusDetails(ctx, kind, supplierRef)
+		if err == nil {
+			return items, nil
+		}
 	}
 	items, err := a.collectTelegramPurchaseReceipts(ctx)
 	if err != nil {
