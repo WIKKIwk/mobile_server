@@ -5,8 +5,11 @@ LOG_FILE := .core.log
 ENV_FILE := .env
 REPO_ROOT := $(abspath ..)
 PUBLIC_START_SCRIPT := $(REPO_ROOT)/mobile_app/start_domain_core.sh
+ERP_DIRECT_SITE_CONFIG_PATH ?= /home/wikki/storage/local.git/erpnext_n1/erp/sites/erp.localhost/site_config.json
+ERP_DIRECT_DB_HOST ?= 127.0.0.1
+ERP_DIRECT_DB_PORT ?= 3306
 
-.PHONY: run run-local stop test fmt tidy
+.PHONY: run run-local run-local-db stop test fmt tidy
 
 run: stop
 	@echo "Starting core on $(ADDR)"
@@ -58,6 +61,28 @@ run-local: stop
 		exit 1; \
 	fi; \
 	MOBILE_API_ADDR="$(ADDR)" go run $(APP)
+
+run-local-db: stop
+	@echo "Starting core with direct ERP DB read on $(ADDR)"
+	@set -a; \
+	if [ -f "$(ENV_FILE)" ]; then \
+		. "./$(ENV_FILE)"; \
+		echo "Loaded $(ENV_FILE)"; \
+	fi; \
+	set +a; \
+	port="$(ADDR)"; \
+	port="$${port##*:}"; \
+	if ss -ltn "( sport = :$$port )" 2>/dev/null | tail -n +2 | grep -q .; then \
+		echo "Port $$port is still busy; refusing to start"; \
+		ss -ltnp "( sport = :$$port )" || true; \
+		exit 1; \
+	fi; \
+	ERP_DIRECT_READ_ENABLED=1 \
+	ERP_DIRECT_SITE_CONFIG_PATH="$(ERP_DIRECT_SITE_CONFIG_PATH)" \
+	ERP_DIRECT_DB_HOST="$(ERP_DIRECT_DB_HOST)" \
+	ERP_DIRECT_DB_PORT="$(ERP_DIRECT_DB_PORT)" \
+	MOBILE_API_ADDR="$(ADDR)" \
+	go run $(APP)
 
 stop:
 	@port="$(ADDR)"; \
