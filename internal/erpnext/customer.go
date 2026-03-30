@@ -196,7 +196,8 @@ func (c *Client) ListCustomerItems(ctx context.Context, baseURL, apiKey, apiSecr
 		customerKeys[trimmed] = struct{}{}
 	}
 
-	candidates, err := c.SearchItems(ctx, normalized, apiKey, apiSecret, "", 500)
+	searchQuery := strings.TrimSpace(query)
+	candidates, err := c.SearchItems(ctx, normalized, apiKey, apiSecret, searchQuery, 500)
 	if err != nil {
 		return nil, err
 	}

@@ -1491,7 +1491,15 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
-	items, err := a.erp.ListCustomerItems(ctx, a.baseURL, a.apiKey, a.apiSecret, customer.ID, "", 500)
+	items, err := a.erp.ListCustomerItems(
+		ctx,
+		a.baseURL,
+		a.apiKey,
+		a.apiSecret,
+		customer.ID,
+		strings.TrimSpace(itemCode),
+		500,
+	)
 	if err != nil {
 		return WerkaCustomerIssueRecord{}, err
 	}
