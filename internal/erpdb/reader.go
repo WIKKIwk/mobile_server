@@ -65,6 +65,7 @@ type deliveryNoteSummaryRow struct {
 	Modified            string
 	Qty                 float64
 	ReturnedQty         float64
+	Remarks             string
 	ItemCode            string
 	ItemName            string
 	UOM                 string
@@ -707,7 +708,8 @@ func (r *Reader) deliveryNoteRows(ctx context.Context, customerRef string) ([]de
 			dn.docstatus,
 			COALESCE(CAST(dn.modified AS CHAR), ''),
 			COALESCE(dn.total_qty, 0),
-			COALESCE(dn.per_returned, 0),
+			COALESCE(dni.returned_qty, 0),
+			COALESCE(dn.remarks, ''),
 			COALESCE(dni.item_code, ''),
 			COALESCE(dni.item_name, ''),
 			COALESCE(dni.uom, ''),
@@ -733,6 +735,7 @@ func (r *Reader) deliveryNoteRows(ctx context.Context, customerRef string) ([]de
 			&row.Modified,
 			&row.Qty,
 			&row.ReturnedQty,
+			&row.Remarks,
 			&row.ItemCode,
 			&row.ItemName,
 			&row.UOM,
@@ -937,6 +940,13 @@ func purchaseReceiptRowToDispatchRecord(row purchaseReceiptSummaryRow) core.Disp
 		sentQty = markerQty
 	}
 	status, _ := classifyWerkaReceipt(row)
+	acceptedQty := 0.0
+	switch status {
+	case "accepted":
+		acceptedQty = row.TotalQty
+	case "partial":
+		acceptedQty = row.TotalQty
+	}
 	return core.DispatchRecord{
 		ID:           strings.TrimSpace(row.Name),
 		RecordType:   "purchase_receipt",
@@ -946,7 +956,7 @@ func purchaseReceiptRowToDispatchRecord(row purchaseReceiptSummaryRow) core.Disp
 		ItemName:     strings.TrimSpace(row.ItemName),
 		UOM:          strings.TrimSpace(row.UOM),
 		SentQty:      sentQty,
-		AcceptedQty:  0,
+		AcceptedQty:  acceptedQty,
 		Amount:       row.Amount,
 		Currency:     strings.TrimSpace(row.Currency),
 		Status:       status,
@@ -955,6 +965,14 @@ func purchaseReceiptRowToDispatchRecord(row purchaseReceiptSummaryRow) core.Disp
 }
 
 func deliveryNoteRowToDispatchRecord(row deliveryNoteSummaryRow) core.DispatchRecord {
+	status := deliveryStatus(row)
+	acceptedQty, returnedQty := deliveryNoteDecisionQuantities(row, status)
+	if status == "accepted" && acceptedQty <= 0 {
+		acceptedQty = row.Qty
+	}
+	if status == "partial" && acceptedQty <= 0 && returnedQty > 0 {
+		acceptedQty = floatMax(row.Qty-returnedQty, 0)
+	}
 	return core.DispatchRecord{
 		ID:           strings.TrimSpace(row.Name),
 		RecordType:   "delivery_note",
@@ -964,9 +982,35 @@ func deliveryNoteRowToDispatchRecord(row deliveryNoteSummaryRow) core.DispatchRe
 		ItemName:     strings.TrimSpace(row.ItemName),
 		UOM:          strings.TrimSpace(row.UOM),
 		SentQty:      row.Qty,
-		AcceptedQty:  0,
-		Status:       deliveryStatus(row),
+		AcceptedQty:  acceptedQty,
+		Status:       status,
 		CreatedLabel: strings.TrimSpace(row.Modified),
+	}
+}
+
+func deliveryNoteDecisionQuantities(row deliveryNoteSummaryRow, status string) (acceptedQty, returnedQty float64) {
+	acceptedQty, returnedQty = erpnext.ExtractCustomerDecisionQuantities(row.Remarks)
+	if returnedQty <= 0 && row.ReturnedQty > 0 {
+		returnedQty = row.ReturnedQty
+	}
+	switch status {
+	case "accepted":
+		if acceptedQty <= 0 {
+			acceptedQty = row.Qty
+		}
+		return acceptedQty, 0
+	case "partial":
+		if acceptedQty <= 0 && returnedQty > 0 {
+			acceptedQty = floatMax(row.Qty-returnedQty, 0)
+		}
+		if returnedQty <= 0 && acceptedQty > 0 {
+			returnedQty = floatMax(row.Qty-acceptedQty, 0)
+		}
+		return acceptedQty, returnedQty
+	case "rejected", "cancelled":
+		return 0, row.Qty
+	default:
+		return acceptedQty, returnedQty
 	}
 }
 
