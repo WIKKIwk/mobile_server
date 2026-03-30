@@ -10,10 +10,12 @@ import (
 )
 
 type adminSuppliersERPStub struct {
+	searchItems                 func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Item, error)
 	searchCustomers             func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Customer, error)
 	searchSuppliers             func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Supplier, error)
 	getSupplier                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Supplier, error)
 	getCustomer                 func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error)
+	getItemCustomerAssignment   func(ctx context.Context, baseURL, apiKey, apiSecret, itemCode string) (erpnext.ItemCustomerAssignment, error)
 	listCustomerItems           func(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error)
 	getDeliveryNote             func(ctx context.Context, baseURL, apiKey, apiSecret, name string) (erpnext.DeliveryNoteDraft, error)
 	listDeliveryNoteComments    func(ctx context.Context, baseURL, apiKey, apiSecret, name string, limit int) ([]erpnext.Comment, error)
@@ -33,6 +35,9 @@ type adminSuppliersERPStub struct {
 }
 
 func (s *adminSuppliersERPStub) SearchItems(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Item, error) {
+	if s.searchItems != nil {
+		return s.searchItems(ctx, baseURL, apiKey, apiSecret, query, limit)
+	}
 	return nil, nil
 }
 
@@ -132,6 +137,9 @@ func (s *adminSuppliersERPStub) ListCustomerItems(ctx context.Context, baseURL, 
 }
 
 func (s *adminSuppliersERPStub) GetItemCustomerAssignment(ctx context.Context, baseURL, apiKey, apiSecret, itemCode string) (erpnext.ItemCustomerAssignment, error) {
+	if s.getItemCustomerAssignment != nil {
+		return s.getItemCustomerAssignment(ctx, baseURL, apiKey, apiSecret, itemCode)
+	}
 	return erpnext.ItemCustomerAssignment{}, nil
 }
 

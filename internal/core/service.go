@@ -1282,12 +1282,49 @@ func (a *ERPAuthenticator) WerkaCustomerItemOptions(ctx context.Context, query s
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range mapped {
-		assignment, err := a.erp.GetItemCustomerAssignment(ctx, a.baseURL, a.apiKey, a.apiSecret, item.Code)
-		if err != nil {
-			return nil, err
+
+	type itemAssignment struct {
+		item         SupplierItem
+		customerRefs []string
+		err          error
+	}
+
+	assignments := make([]itemAssignment, len(mapped))
+	workerCount := len(mapped)
+	if workerCount > 8 {
+		workerCount = 8
+	}
+	if workerCount > 0 {
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for worker := 0; worker < workerCount; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range jobs {
+					item := mapped[idx]
+					assignment, err := a.erp.GetItemCustomerAssignment(ctx, a.baseURL, a.apiKey, a.apiSecret, item.Code)
+					assignments[idx] = itemAssignment{
+						item:         item,
+						customerRefs: assignment.CustomerRefs,
+						err:          err,
+					}
+				}
+			}()
 		}
-		for _, customerRef := range assignment.CustomerRefs {
+		for idx := range mapped {
+			jobs <- idx
+		}
+		close(jobs)
+		wg.Wait()
+	}
+
+	for _, assignment := range assignments {
+		if assignment.err != nil {
+			return nil, assignment.err
+		}
+		item := assignment.item
+		for _, customerRef := range assignment.customerRefs {
 			customer, ok := customerByRef[strings.TrimSpace(customerRef)]
 			if !ok {
 				continue

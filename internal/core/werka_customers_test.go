@@ -56,3 +56,59 @@ func TestWerkaCustomersOnlyReturnsCustomersWithAssignedItems(t *testing.T) {
 		t.Fatalf("unexpected customer refs: %+v", items)
 	}
 }
+
+func TestWerkaCustomerItemOptionsReturnsAssignedPairs(t *testing.T) {
+	stub := &adminSuppliersERPStub{
+		searchCustomers: func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Customer, error) {
+			return []erpnext.Customer{
+				{ID: "CUS-001", Name: "Vali", Phone: "+998901111111"},
+				{ID: "CUS-002", Name: "Ali", Phone: "+998902222222"},
+			}, nil
+		},
+		searchItems: func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Item, error) {
+			return []erpnext.Item{
+				{Code: "ITEM-001", Name: "Un", UOM: "Kg"},
+				{Code: "ITEM-002", Name: "Shakar", UOM: "Kg"},
+			}, nil
+		},
+		getItemCustomerAssignment: func(ctx context.Context, baseURL, apiKey, apiSecret, itemCode string) (erpnext.ItemCustomerAssignment, error) {
+			switch itemCode {
+			case "ITEM-001":
+				return erpnext.ItemCustomerAssignment{
+					Code:         itemCode,
+					CustomerRefs: []string{"CUS-001", "CUS-002"},
+				}, nil
+			case "ITEM-002":
+				return erpnext.ItemCustomerAssignment{
+					Code:         itemCode,
+					CustomerRefs: []string{"CUS-002"},
+				}, nil
+			default:
+				return erpnext.ItemCustomerAssignment{Code: itemCode}, nil
+			}
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Stores - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	items, err := auth.WerkaCustomerItemOptions(context.Background(), "", 200)
+	if err != nil {
+		t.Fatalf("WerkaCustomerItemOptions() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 assigned customer-item pairs, got %d", len(items))
+	}
+}
