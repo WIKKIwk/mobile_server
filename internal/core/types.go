@@ -30,8 +30,9 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token   string    `json:"token"`
-	Profile Principal `json:"profile"`
+	Token     string         `json:"token"`
+	Profile   Principal      `json:"profile"`
+	WerkaHome *WerkaHomeData `json:"werka_home,omitempty"`
 }
 
 type DispatchRecord struct {

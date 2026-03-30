@@ -157,9 +157,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var werkaHome *WerkaHomeData
+	if principal.Role == RoleWerka {
+		if data, err := s.auth.WerkaHome(r.Context(), 20); err == nil {
+			werkaHome = &data
+		}
+	}
+
 	writeJSON(w, http.StatusOK, LoginResponse{
-		Token:   token,
-		Profile: withAvatarProxy(r, principal, token),
+		Token:     token,
+		Profile:   withAvatarProxy(r, principal, token),
+		WerkaHome: werkaHome,
 	})
 }
 
