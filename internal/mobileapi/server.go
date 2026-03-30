@@ -883,8 +883,9 @@ func (s *Server) handleWerkaSuppliers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	limit := optionalSearchLimit(r, 200, 200)
-	items, err := s.auth.WerkaSuppliers(r.Context(), limit)
+	items, err := s.auth.WerkaSuppliers(r.Context(), query, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka suppliers failed"})
 		return

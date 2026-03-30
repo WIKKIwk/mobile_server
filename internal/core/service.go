@@ -1194,18 +1194,42 @@ func resolveNotificationTarget(receiptID string) (targetName, targetType, eventT
 	return trimmedReceiptID, notificationTargetPurchaseReceipt, eventType, nil
 }
 
-func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, limit int) ([]SupplierDirectoryEntry, error) {
-	items, err := a.AdminSuppliers(ctx, limit)
+func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, query string, limit int) ([]SupplierDirectoryEntry, error) {
+	searchLimit := limit
+	if searchLimit <= 0 {
+		searchLimit = 100
+	}
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		searchLimit *= 4
+	} else {
+		searchLimit = 500
+	}
+	if searchLimit > 500 {
+		searchLimit = 500
+	}
+
+	items, err := a.erp.SearchSuppliers(ctx, a.baseURL, a.apiKey, a.apiSecret, query, searchLimit)
+	if err != nil {
+		return nil, err
+	}
+	states, err := a.adminSupplierStates()
 	if err != nil {
 		return nil, err
 	}
 	result := make([]SupplierDirectoryEntry, 0, len(items))
 	for _, item := range items {
+		state := states[strings.TrimSpace(item.ID)]
+		if state.Removed || state.Blocked {
+			continue
+		}
 		result = append(result, SupplierDirectoryEntry{
-			Ref:   item.Ref,
+			Ref:   item.ID,
 			Name:  item.Name,
 			Phone: item.Phone,
 		})
+		if limit > 0 && len(result) >= limit {
+			break
+		}
 	}
 	return result, nil
 }
