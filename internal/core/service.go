@@ -109,11 +109,11 @@ type ERPClient interface {
 }
 
 type DirectoryReader interface {
-	SearchWerkaSuppliers(ctx context.Context, query string, limit int) ([]SupplierDirectoryEntry, error)
-	SearchWerkaCustomers(ctx context.Context, query string, limit int) ([]CustomerDirectoryEntry, error)
-	SearchWerkaSupplierItems(ctx context.Context, supplierRef, query string, limit int) ([]SupplierItem, error)
-	SearchWerkaCustomerItems(ctx context.Context, customerRef, query string, limit int) ([]SupplierItem, error)
-	SearchWerkaCustomerItemOptions(ctx context.Context, query string, limit int) ([]CustomerItemOption, error)
+	SearchWerkaSuppliersPage(ctx context.Context, query string, limit, offset int) ([]SupplierDirectoryEntry, error)
+	SearchWerkaCustomersPage(ctx context.Context, query string, limit, offset int) ([]CustomerDirectoryEntry, error)
+	SearchWerkaSupplierItemsPage(ctx context.Context, supplierRef, query string, limit, offset int) ([]SupplierItem, error)
+	SearchWerkaCustomerItemsPage(ctx context.Context, customerRef, query string, limit, offset int) ([]SupplierItem, error)
+	SearchWerkaCustomerItemOptionsPage(ctx context.Context, query string, limit, offset int) ([]CustomerItemOption, error)
 }
 
 type ERPAuthenticator struct {
@@ -1197,10 +1197,14 @@ func resolveNotificationTarget(receiptID string) (targetName, targetType, eventT
 }
 
 func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, query string, limit int) ([]SupplierDirectoryEntry, error) {
+	return a.WerkaSuppliersPage(ctx, query, limit, 0)
+}
+
+func (a *ERPAuthenticator) WerkaSuppliersPage(ctx context.Context, query string, limit, offset int) ([]SupplierDirectoryEntry, error) {
 	if a.reader != nil {
-		return a.reader.SearchWerkaSuppliers(ctx, query, limit)
+		return a.reader.SearchWerkaSuppliersPage(ctx, query, limit, offset)
 	}
-	searchLimit := limit
+	searchLimit := limit + offset
 	if searchLimit <= 0 {
 		searchLimit = 100
 	}
@@ -1236,14 +1240,18 @@ func (a *ERPAuthenticator) WerkaSuppliers(ctx context.Context, query string, lim
 			break
 		}
 	}
-	return result, nil
+	return sliceSupplierDirectoryEntries(result, offset, limit), nil
 }
 
 func (a *ERPAuthenticator) WerkaCustomers(ctx context.Context, query string, limit int) ([]CustomerDirectoryEntry, error) {
+	return a.WerkaCustomersPage(ctx, query, limit, 0)
+}
+
+func (a *ERPAuthenticator) WerkaCustomersPage(ctx context.Context, query string, limit, offset int) ([]CustomerDirectoryEntry, error) {
 	if a.reader != nil {
-		return a.reader.SearchWerkaCustomers(ctx, query, limit)
+		return a.reader.SearchWerkaCustomersPage(ctx, query, limit, offset)
 	}
-	searchLimit := limit
+	searchLimit := limit + offset
 	if searchLimit <= 0 {
 		searchLimit = 100
 	}
@@ -1282,23 +1290,36 @@ func (a *ERPAuthenticator) WerkaCustomers(ctx context.Context, query string, lim
 			break
 		}
 	}
-	return result, nil
+	return sliceCustomerDirectoryEntries(result, offset, limit), nil
 }
 
 func (a *ERPAuthenticator) WerkaCustomerItems(ctx context.Context, customerRef, query string, limit int) ([]SupplierItem, error) {
+	return a.WerkaCustomerItemsPage(ctx, customerRef, query, limit, 0)
+}
+
+func (a *ERPAuthenticator) WerkaCustomerItemsPage(ctx context.Context, customerRef, query string, limit, offset int) ([]SupplierItem, error) {
 	if a.reader != nil {
-		return a.reader.SearchWerkaCustomerItems(ctx, customerRef, query, limit)
+		return a.reader.SearchWerkaCustomerItemsPage(ctx, customerRef, query, limit, offset)
 	}
-	items, err := a.erp.ListCustomerItems(ctx, a.baseURL, a.apiKey, a.apiSecret, strings.TrimSpace(customerRef), query, limit)
+	searchLimit := limit + offset
+	items, err := a.erp.ListCustomerItems(ctx, a.baseURL, a.apiKey, a.apiSecret, strings.TrimSpace(customerRef), query, searchLimit)
 	if err != nil {
 		return nil, err
 	}
-	return a.mapSupplierItems(ctx, items)
+	mapped, err := a.mapSupplierItems(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+	return sliceSupplierItems(mapped, offset, limit), nil
 }
 
 func (a *ERPAuthenticator) WerkaCustomerItemOptions(ctx context.Context, query string, limit int) ([]CustomerItemOption, error) {
+	return a.WerkaCustomerItemOptionsPage(ctx, query, limit, 0)
+}
+
+func (a *ERPAuthenticator) WerkaCustomerItemOptionsPage(ctx context.Context, query string, limit, offset int) ([]CustomerItemOption, error) {
 	if a.reader != nil {
-		return a.reader.SearchWerkaCustomerItemOptions(ctx, query, limit)
+		return a.reader.SearchWerkaCustomerItemOptionsPage(ctx, query, limit, offset)
 	}
 	customers, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, "", 200)
 	if err != nil {
@@ -1419,7 +1440,7 @@ func (a *ERPAuthenticator) WerkaCustomerItemOptions(ctx context.Context, query s
 		return strings.ToLower(result[i].ItemCode) < strings.ToLower(result[j].ItemCode)
 	})
 
-	return result, nil
+	return sliceCustomerItemOptions(result, offset, limit), nil
 }
 
 func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, principal Principal, customerRef, itemCode string, qty float64) (WerkaCustomerIssueRecord, error) {
@@ -1513,11 +1534,19 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 }
 
 func (a *ERPAuthenticator) WerkaSupplierItems(ctx context.Context, supplierRef, query string, limit int) ([]SupplierItem, error) {
+	return a.WerkaSupplierItemsPage(ctx, supplierRef, query, limit, 0)
+}
+
+func (a *ERPAuthenticator) WerkaSupplierItemsPage(ctx context.Context, supplierRef, query string, limit, offset int) ([]SupplierItem, error) {
 	if a.reader != nil {
-		return a.reader.SearchWerkaSupplierItems(ctx, supplierRef, query, limit)
+		return a.reader.SearchWerkaSupplierItemsPage(ctx, supplierRef, query, limit, offset)
 	}
 	principal := Principal{Role: RoleSupplier, Ref: strings.TrimSpace(supplierRef)}
-	return a.supplierAllowedItems(ctx, principal, query, limit)
+	items, err := a.supplierAllowedItems(ctx, principal, query, limit+offset)
+	if err != nil {
+		return nil, err
+	}
+	return sliceSupplierItems(items, offset, limit), nil
 }
 
 func (a *ERPAuthenticator) CreateWerkaUnannouncedDraft(ctx context.Context, principal Principal, supplierRef, itemCode string, qty float64) (DispatchRecord, error) {
@@ -2807,4 +2836,60 @@ func dispatchStatusFromQuantities(sentQty, acceptedQty float64) string {
 	default:
 		return "accepted"
 	}
+}
+
+func sliceSupplierDirectoryEntries(items []SupplierDirectoryEntry, offset, limit int) []SupplierDirectoryEntry {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []SupplierDirectoryEntry{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
+func sliceCustomerDirectoryEntries(items []CustomerDirectoryEntry, offset, limit int) []CustomerDirectoryEntry {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []CustomerDirectoryEntry{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
+func sliceSupplierItems(items []SupplierItem, offset, limit int) []SupplierItem {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []SupplierItem{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
+func sliceCustomerItemOptions(items []CustomerItemOption, offset, limit int) []CustomerItemOption {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []CustomerItemOption{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
 }

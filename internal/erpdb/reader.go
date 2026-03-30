@@ -123,7 +123,7 @@ func ParsePort(raw string, fallback int) int {
 	return fallback
 }
 
-func (r *Reader) SearchWerkaSuppliers(ctx context.Context, query string, limit int) ([]core.SupplierDirectoryEntry, error) {
+func (r *Reader) SearchWerkaSuppliersPage(ctx context.Context, query string, limit, offset int) ([]core.SupplierDirectoryEntry, error) {
 	limit = clampLimit(limit, 50, 500)
 	like := likePattern(query)
 	rows, err := r.db.QueryContext(ctx, `
@@ -138,8 +138,8 @@ func (r *Reader) SearchWerkaSuppliers(ctx context.Context, query string, limit i
 		  AND i.disabled = 0
 		  AND (? = '' OR s.name LIKE ? ESCAPE '\\' OR s.supplier_name LIKE ? ESCAPE '\\' OR COALESCE(s.mobile_no, '') LIKE ? ESCAPE '\\')
 		ORDER BY s.modified DESC
-		LIMIT ?`,
-		strings.TrimSpace(query), like, like, like, limit,
+		LIMIT ? OFFSET ?`,
+		strings.TrimSpace(query), like, like, like, limit, max(offset, 0),
 	)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func (r *Reader) SearchWerkaSuppliers(ctx context.Context, query string, limit i
 	return result, rows.Err()
 }
 
-func (r *Reader) SearchWerkaCustomers(ctx context.Context, query string, limit int) ([]core.CustomerDirectoryEntry, error) {
+func (r *Reader) SearchWerkaCustomersPage(ctx context.Context, query string, limit, offset int) ([]core.CustomerDirectoryEntry, error) {
 	limit = clampLimit(limit, 50, 500)
 	like := likePattern(query)
 	rows, err := r.db.QueryContext(ctx, `
@@ -172,8 +172,8 @@ func (r *Reader) SearchWerkaCustomers(ctx context.Context, query string, limit i
 		  AND i.disabled = 0
 		  AND (? = '' OR c.name LIKE ? ESCAPE '\\' OR c.customer_name LIKE ? ESCAPE '\\' OR COALESCE(c.mobile_no, '') LIKE ? ESCAPE '\\')
 		ORDER BY c.modified DESC
-		LIMIT ?`,
-		strings.TrimSpace(query), like, like, like, limit,
+		LIMIT ? OFFSET ?`,
+		strings.TrimSpace(query), like, like, like, limit, max(offset, 0),
 	)
 	if err != nil {
 		return nil, err
@@ -191,7 +191,7 @@ func (r *Reader) SearchWerkaCustomers(ctx context.Context, query string, limit i
 	return result, rows.Err()
 }
 
-func (r *Reader) SearchWerkaCustomerItems(ctx context.Context, customerRef, query string, limit int) ([]core.SupplierItem, error) {
+func (r *Reader) SearchWerkaCustomerItemsPage(ctx context.Context, customerRef, query string, limit, offset int) ([]core.SupplierItem, error) {
 	limit = clampLimit(limit, 50, 500)
 	like := likePattern(query)
 	rows, err := r.db.QueryContext(ctx, `
@@ -205,9 +205,9 @@ func (r *Reader) SearchWerkaCustomerItems(ctx context.Context, customerRef, quer
 		  AND i.disabled = 0
 		  AND (? = '' OR i.item_code LIKE ? ESCAPE '\\' OR i.item_name LIKE ? ESCAPE '\\')
 		ORDER BY i.item_name ASC
-		LIMIT ?`,
+		LIMIT ? OFFSET ?`,
 		strings.TrimSpace(customerRef),
-		strings.TrimSpace(query), like, like, limit,
+		strings.TrimSpace(query), like, like, limit, max(offset, 0),
 	)
 	if err != nil {
 		return nil, err
@@ -226,7 +226,7 @@ func (r *Reader) SearchWerkaCustomerItems(ctx context.Context, customerRef, quer
 	return result, rows.Err()
 }
 
-func (r *Reader) SearchWerkaSupplierItems(ctx context.Context, supplierRef, query string, limit int) ([]core.SupplierItem, error) {
+func (r *Reader) SearchWerkaSupplierItemsPage(ctx context.Context, supplierRef, query string, limit, offset int) ([]core.SupplierItem, error) {
 	limit = clampLimit(limit, 50, 500)
 	like := likePattern(query)
 	rows, err := r.db.QueryContext(ctx, `
@@ -240,9 +240,9 @@ func (r *Reader) SearchWerkaSupplierItems(ctx context.Context, supplierRef, quer
 		  AND i.disabled = 0
 		  AND (? = '' OR i.item_code LIKE ? ESCAPE '\\' OR i.item_name LIKE ? ESCAPE '\\')
 		ORDER BY i.item_name ASC
-		LIMIT ?`,
+		LIMIT ? OFFSET ?`,
 		strings.TrimSpace(supplierRef),
-		strings.TrimSpace(query), like, like, limit,
+		strings.TrimSpace(query), like, like, limit, max(offset, 0),
 	)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func (r *Reader) SearchWerkaSupplierItems(ctx context.Context, supplierRef, quer
 	return result, rows.Err()
 }
 
-func (r *Reader) SearchWerkaCustomerItemOptions(ctx context.Context, query string, limit int) ([]core.CustomerItemOption, error) {
+func (r *Reader) SearchWerkaCustomerItemOptionsPage(ctx context.Context, query string, limit, offset int) ([]core.CustomerItemOption, error) {
 	limit = clampLimit(limit, 50, 500)
 	like := likePattern(query)
 	rows, err := r.db.QueryContext(ctx, `
@@ -286,8 +286,8 @@ func (r *Reader) SearchWerkaCustomerItemOptions(ctx context.Context, query strin
 			OR COALESCE(c.mobile_no, '') LIKE ? ESCAPE '\\'
 		  )
 		ORDER BY i.item_name ASC, c.customer_name ASC
-		LIMIT ?`,
-		strings.TrimSpace(query), like, like, like, like, like, limit,
+		LIMIT ? OFFSET ?`,
+		strings.TrimSpace(query), like, like, like, like, like, limit, max(offset, 0),
 	)
 	if err != nil {
 		return nil, err
@@ -321,6 +321,13 @@ func clampLimit(value, fallback, max int) int {
 		value = max
 	}
 	return value
+}
+
+func max(value, fallback int) int {
+	if value > fallback {
+		return value
+	}
+	return fallback
 }
 
 func likePattern(query string) string {
