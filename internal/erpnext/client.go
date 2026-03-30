@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type AuthInfo struct {
@@ -135,6 +136,9 @@ type DeliveryNoteDraft struct {
 
 type Client struct {
 	httpClient *http.Client
+
+	deliveryNoteStateFieldsMu      sync.RWMutex
+	deliveryNoteStateFieldsEnsured bool
 }
 
 func NewClient(httpClient *http.Client) *Client {

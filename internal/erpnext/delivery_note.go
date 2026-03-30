@@ -239,6 +239,19 @@ func applyPartialDeliveryReturnQty(doc map[string]interface{}, returnedQty float
 }
 
 func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, apiKey, apiSecret string) error {
+	c.deliveryNoteStateFieldsMu.RLock()
+	if c.deliveryNoteStateFieldsEnsured {
+		c.deliveryNoteStateFieldsMu.RUnlock()
+		return nil
+	}
+	c.deliveryNoteStateFieldsMu.RUnlock()
+
+	c.deliveryNoteStateFieldsMu.Lock()
+	defer c.deliveryNoteStateFieldsMu.Unlock()
+	if c.deliveryNoteStateFieldsEnsured {
+		return nil
+	}
+
 	normalized, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return err
@@ -372,6 +385,8 @@ func (c *Client) EnsureDeliveryNoteStateFields(ctx context.Context, baseURL, api
 			}
 		}
 	}
+
+	c.deliveryNoteStateFieldsEnsured = true
 	return nil
 }
 
