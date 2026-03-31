@@ -1719,7 +1719,10 @@ func (a *ERPAuthenticator) CustomerHistory(ctx context.Context, principal Princi
 
 func (a *ERPAuthenticator) CustomerSummary(ctx context.Context, principal Principal) (CustomerHomeSummary, error) {
 	if a.reader != nil {
-		return a.reader.CustomerSummary(ctx, principal.Ref)
+		summary, err := a.reader.CustomerSummary(ctx, principal.Ref)
+		if err == nil {
+			return summary, nil
+		}
 	}
 	items, err := a.collectCustomerDeliveryNotes(ctx, principal.Ref)
 	if err != nil {
