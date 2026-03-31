@@ -609,7 +609,9 @@ func (a *ERPAuthenticator) WerkaHome(ctx context.Context, pendingLimit int) (Wer
 
 func (a *ERPAuthenticator) WerkaSummary(ctx context.Context) (WerkaHomeSummary, error) {
 	if a.reader != nil {
-		summary, err := a.reader.WerkaSummary(ctx)
+		readerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		summary, err := a.reader.WerkaSummary(readerCtx)
 		if err == nil {
 			return summary, nil
 		}
@@ -782,7 +784,9 @@ func (a *ERPAuthenticator) WerkaStatusDetails(ctx context.Context, kind, supplie
 
 func (a *ERPAuthenticator) WerkaHistory(ctx context.Context) ([]DispatchRecord, error) {
 	if a.reader != nil {
-		items, err := a.reader.WerkaHistory(ctx)
+		readerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		items, err := a.reader.WerkaHistory(readerCtx)
 		if err == nil {
 			return items, nil
 		}
