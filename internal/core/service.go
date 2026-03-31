@@ -584,7 +584,10 @@ func (a *ERPAuthenticator) WerkaPending(ctx context.Context, limit int) ([]Dispa
 
 func (a *ERPAuthenticator) WerkaHome(ctx context.Context, pendingLimit int) (WerkaHomeData, error) {
 	if a.reader != nil {
-		return a.reader.WerkaHome(ctx, pendingLimit)
+		home, err := a.reader.WerkaHome(ctx, pendingLimit)
+		if err == nil {
+			return home, nil
+		}
 	}
 	summary, err := a.WerkaSummary(ctx)
 	if err != nil {
@@ -602,7 +605,10 @@ func (a *ERPAuthenticator) WerkaHome(ctx context.Context, pendingLimit int) (Wer
 
 func (a *ERPAuthenticator) WerkaSummary(ctx context.Context) (WerkaHomeSummary, error) {
 	if a.reader != nil {
-		return a.reader.WerkaSummary(ctx)
+		summary, err := a.reader.WerkaSummary(ctx)
+		if err == nil {
+			return summary, nil
+		}
 	}
 	items, err := a.collectTelegramPurchaseReceipts(ctx)
 	if err != nil {
