@@ -716,6 +716,41 @@ func TestServerLogoutInvalidatesSession(t *testing.T) {
 	}
 }
 
+func TestServerHandlesCORSPreflight(t *testing.T) {
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+
+	req := httptest.NewRequest(http.MethodOptions, "/v1/mobile/auth/login", nil)
+	req.Header.Set("Origin", "http://localhost:1234")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("unexpected preflight status: %d", resp.Code)
+	}
+	if got := resp.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:1234" {
+		t.Fatalf("unexpected allow origin: %q", got)
+	}
+	if got := resp.Header().Get("Access-Control-Allow-Headers"); got != "content-type" {
+		t.Fatalf("unexpected allow headers: %q", got)
+	}
+}
+
 func TestServerProfileUpdateAndAvatarFlow(t *testing.T) {
 	fakeERP := &fakeERPClient{
 		suppliers: []erpnext.Supplier{
