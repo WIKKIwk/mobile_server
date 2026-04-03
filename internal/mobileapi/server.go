@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/customer-items", s.handleWerkaCustomerItems)
 	mux.HandleFunc("/v1/mobile/werka/customer-item-options", s.handleWerkaCustomerItemOptions)
 	mux.HandleFunc("/v1/mobile/werka/customer-issue/create", s.handleWerkaCustomerIssueCreate)
+	mux.HandleFunc("/v1/mobile/werka/customer-issue/batch-create", s.handleWerkaCustomerIssueBatchCreate)
 	mux.HandleFunc("/v1/mobile/werka/unannounced/create", s.handleWerkaUnannouncedCreate)
 	mux.HandleFunc("/v1/mobile/werka/status-breakdown", s.handleWerkaStatusBreakdown)
 	mux.HandleFunc("/v1/mobile/werka/status-details", s.handleWerkaStatusDetails)
@@ -1136,6 +1137,39 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 		log.Printf("push send failed for customer delivery note: %v", err)
 	}
 	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleWerkaCustomerIssueBatchCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	var req WerkaCustomerIssueBatchCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	result, err := s.auth.CreateWerkaCustomerIssueBatch(r.Context(), principal, req)
+	if err != nil {
+		if errors.Is(err, ErrInvalidInput) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka customer issue batch create failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleWerkaUnannouncedCreate(w http.ResponseWriter, r *http.Request) {

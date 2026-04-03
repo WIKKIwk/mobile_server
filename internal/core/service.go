@@ -1616,6 +1616,53 @@ func (a *ERPAuthenticator) CreateWerkaCustomerIssue(ctx context.Context, princip
 	}, nil
 }
 
+func (a *ERPAuthenticator) CreateWerkaCustomerIssueBatch(ctx context.Context, principal Principal, req WerkaCustomerIssueBatchCreateRequest) (WerkaCustomerIssueBatchResult, error) {
+	if principal.Role != RoleWerka {
+		return WerkaCustomerIssueBatchResult{}, ErrUnauthorized
+	}
+	if len(req.Lines) == 0 {
+		return WerkaCustomerIssueBatchResult{}, fmt.Errorf("%w: at least one line is required", ErrInvalidInput)
+	}
+
+	result := WerkaCustomerIssueBatchResult{
+		ClientBatchID: strings.TrimSpace(req.ClientBatchID),
+		Created:       make([]WerkaCustomerIssueBatchLineResult, 0, len(req.Lines)),
+		Failed:        make([]WerkaCustomerIssueBatchLineResult, 0),
+	}
+
+	for index, line := range req.Lines {
+		if strings.TrimSpace(line.CustomerRef) == "" {
+			return WerkaCustomerIssueBatchResult{}, fmt.Errorf("%w: customer_ref is required at line %d", ErrInvalidInput, index)
+		}
+		if strings.TrimSpace(line.ItemCode) == "" {
+			return WerkaCustomerIssueBatchResult{}, fmt.Errorf("%w: item_code is required at line %d", ErrInvalidInput, index)
+		}
+		if line.Qty <= 0 {
+			return WerkaCustomerIssueBatchResult{}, fmt.Errorf("%w: qty must be greater than 0 at line %d", ErrInvalidInput, index)
+		}
+
+		record, err := a.CreateWerkaCustomerIssue(ctx, principal, line.CustomerRef, line.ItemCode, line.Qty)
+		if err != nil {
+			lineResult := WerkaCustomerIssueBatchLineResult{
+				LineIndex: index,
+				Error:     err.Error(),
+			}
+			if errors.Is(err, ErrInsufficientStock) {
+				lineResult.ErrorCode = "insufficient_stock"
+			}
+			result.Failed = append(result.Failed, lineResult)
+			continue
+		}
+		recordCopy := record
+		result.Created = append(result.Created, WerkaCustomerIssueBatchLineResult{
+			LineIndex: index,
+			Record:    &recordCopy,
+		})
+	}
+
+	return result, nil
+}
+
 func (a *ERPAuthenticator) WarmupWerkaCustomerIssue(ctx context.Context) error {
 	if _, err := a.resolveWarehouse(ctx); err != nil {
 		return err

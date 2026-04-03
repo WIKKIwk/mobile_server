@@ -415,7 +415,7 @@ func (f *fakeERPClient) CreateAndSubmitDeliveryNote(_ context.Context, _, _, _ s
 
 func (f *fakeERPClient) CreateDraftDeliveryNote(_ context.Context, _, _, _ string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
 	f.lastDeliveryNote = input
-	name := "MAT-DN-0001"
+	name := "MAT-DN-" + input.ItemCode
 	f.customerDeliveryNotes = append([]erpnext.DeliveryNoteDraft{{
 		Name:         name,
 		Customer:     input.Customer,
@@ -1128,6 +1128,66 @@ func TestServerWerkaPendingIncludesDraftReceipts(t *testing.T) {
 	}
 	if items[0].ID != "MAT-PRE-0001" || items[0].Status != "draft" {
 		t.Fatalf("unexpected pending item payload: %+v", items[0])
+	}
+}
+
+func TestServerWerkaCustomerIssueBatchCreateReturnsCreatedAndFailed(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		customers: []erpnext.Customer{
+			{ID: "CUST-001", Name: "Customer One"},
+			{ID: "CUST-002", Name: "Customer Two"},
+		},
+		items: []erpnext.Item{
+			{Code: "ITEM-OK", Name: "Item OK", UOM: "Kg"},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{Role: RoleWerka, DisplayName: "Werka", Ref: "werka"})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/werka/customer-issue/batch-create",
+		bytes.NewReader([]byte(`{"client_batch_id":"batch-1","lines":[{"customer_ref":"CUST-001","item_code":"ITEM-OK","qty":2},{"customer_ref":"CUST-002","item_code":"ITEM-FAIL","qty":3}]}`)),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected batch create status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result WerkaCustomerIssueBatchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode batch result: %v", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("expected 1 created line, got %+v", result.Created)
+	}
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed line, got %+v", result.Failed)
+	}
+	if result.Created[0].LineIndex != 0 || result.Created[0].Record == nil {
+		t.Fatalf("unexpected created line: %+v", result.Created[0])
+	}
+	if result.Failed[0].LineIndex != 1 || result.Failed[0].ErrorCode != "" || result.Failed[0].Error == "" {
+		t.Fatalf("unexpected failed line: %+v", result.Failed[0])
 	}
 }
 

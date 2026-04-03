@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mobile_server/internal/erpnext"
@@ -881,6 +882,84 @@ func TestCreateWerkaCustomerIssueMapsNegativeStockAndDeletesDraft(t *testing.T) 
 	}
 	if deletedName != "MAT-DN-DRAFT-1" {
 		t.Fatalf("expected draft cleanup, got %q", deletedName)
+	}
+}
+
+func TestCreateWerkaCustomerIssueBatchCollectsCreatedAndFailedLines(t *testing.T) {
+	stub := &adminSuppliersERPStub{
+		getCustomer: func(ctx context.Context, baseURL, apiKey, apiSecret, id string) (erpnext.Customer, error) {
+			return erpnext.Customer{ID: id, Name: id}, nil
+		},
+		listCustomerItems: func(ctx context.Context, baseURL, apiKey, apiSecret, customerRef, query string, limit int) ([]erpnext.Item, error) {
+			return []erpnext.Item{{Code: query, Name: query, UOM: "Kg"}}, nil
+		},
+		getItemsByCodes: func(ctx context.Context, baseURL, apiKey, apiSecret string, itemCodes []string) ([]erpnext.Item, error) {
+			items := make([]erpnext.Item, 0, len(itemCodes))
+			for _, code := range itemCodes {
+				items = append(items, erpnext.Item{Code: code, Name: code, UOM: "Kg"})
+			}
+			return items, nil
+		},
+		searchWarehouses: func(ctx context.Context, baseURL, apiKey, apiSecret, query string, limit int) ([]erpnext.Warehouse, error) {
+			return []erpnext.Warehouse{{Name: "Stores - A"}}, nil
+		},
+		searchCompanies: func(ctx context.Context, baseURL, apiKey, apiSecret string, limit int) ([]erpnext.Company, error) {
+			return []erpnext.Company{{Name: "Main Company"}}, nil
+		},
+		createDraftDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret string, input erpnext.CreateDeliveryNoteInput) (erpnext.DeliveryNoteResult, error) {
+			return erpnext.DeliveryNoteResult{Name: "MAT-DN-DRAFT-" + input.ItemCode}, nil
+		},
+		submitDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+			if strings.Contains(name, "ITEM-FAIL") {
+				return errors.New(`status 417: {"exception":"erpnext.stock.stock_ledger.NegativeStockError"}`)
+			}
+			return nil
+		},
+		deleteDeliveryNote: func(ctx context.Context, baseURL, apiKey, apiSecret, name string) error {
+			return nil
+		},
+	}
+
+	auth := NewERPAuthenticator(
+		stub,
+		"http://erp.test",
+		"key",
+		"secret",
+		"Stores - A",
+		"10",
+		"20",
+		"",
+		"",
+		"",
+		nil,
+		nil,
+	)
+
+	result, err := auth.CreateWerkaCustomerIssueBatch(
+		context.Background(),
+		Principal{Role: RoleWerka, Ref: "werka"},
+		WerkaCustomerIssueBatchCreateRequest{
+			ClientBatchID: "batch-1",
+			Lines: []WerkaCustomerIssueBatchLine{
+				{CustomerRef: "CUST-001", ItemCode: "ITEM-OK", Qty: 2},
+				{CustomerRef: "CUST-002", ItemCode: "ITEM-FAIL", Qty: 3},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateWerkaCustomerIssueBatch() error = %v", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("expected 1 created line, got %+v", result.Created)
+	}
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed line, got %+v", result.Failed)
+	}
+	if result.Created[0].LineIndex != 0 || result.Created[0].Record == nil {
+		t.Fatalf("unexpected created payload: %+v", result.Created[0])
+	}
+	if result.Failed[0].LineIndex != 1 || result.Failed[0].ErrorCode != "insufficient_stock" {
+		t.Fatalf("unexpected failed payload: %+v", result.Failed[0])
 	}
 }
 
