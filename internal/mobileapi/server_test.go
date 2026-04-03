@@ -2274,6 +2274,68 @@ func TestServerWerkaArchiveSentDaily(t *testing.T) {
 	}
 }
 
+func TestServerWerkaArchivePDFSentDaily(t *testing.T) {
+	now := time.Now().In(time.FixedZone("Asia/Tashkent", 5*60*60))
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			customers: []erpnext.Customer{
+				{ID: "CUS-001", Name: "Customer One"},
+			},
+			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
+				{
+					Name:                "MAT-DN-TODAY",
+					Customer:            "CUS-001",
+					CustomerName:        "Customer One",
+					ItemCode:            "ITEM-001",
+					ItemName:            "Rice",
+					Qty:                 3,
+					UOM:                 "Kg",
+					Modified:            now.Format("2006-01-02 15:04:05"),
+					DocStatus:           1,
+					AccordFlowState:     "1",
+					AccordCustomerState: "1",
+				},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleWerka,
+		DisplayName: "Werka",
+		Ref:         "werka",
+	})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/archive/pdf?kind=sent&period=daily", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+	if got := resp.Header().Get("Content-Disposition"); !strings.Contains(got, ".pdf") {
+		t.Fatalf("unexpected content disposition: %q", got)
+	}
+	if !bytes.HasPrefix(resp.Body.Bytes(), []byte("%PDF-")) {
+		t.Fatalf("expected pdf prefix, got %q", resp.Body.Bytes()[:8])
+	}
+}
+
 func TestServerAdminActivityStillRespectsLimit(t *testing.T) {
 	receipts := make([]erpnext.PurchaseReceiptDraft, 0, 40)
 	for index := 0; index < 40; index++ {

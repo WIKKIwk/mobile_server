@@ -193,6 +193,12 @@ type WerkaArchiveResponse struct {
 	Items   []DispatchRecord    `json:"items"`
 }
 
+type GeneratedFile struct {
+	Filename    string
+	ContentType string
+	Body        []byte
+}
+
 type CreateDispatchRequest struct {
 	ItemCode string  `json:"item_code"`
 	Qty      float64 `json:"qty"`
