@@ -1418,6 +1418,15 @@ func (s *Server) handleWerkaArchivePDF(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(file.Filename) != "" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", file.Filename))
 	}
+	if strings.TrimSpace(file.ReportID) != "" {
+		w.Header().Set("X-Archive-Report-ID", file.ReportID)
+	}
+	if strings.TrimSpace(file.VerifyCode) != "" {
+		w.Header().Set("X-Archive-Verify-Code", file.VerifyCode)
+	}
+	if strings.TrimSpace(file.VerifyURL) != "" {
+		w.Header().Set("X-Archive-Verify-URL", file.VerifyURL)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(file.Body)

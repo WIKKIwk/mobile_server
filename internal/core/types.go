@@ -197,6 +197,9 @@ type GeneratedFile struct {
 	Filename    string
 	ContentType string
 	Body        []byte
+	ReportID    string
+	VerifyCode  string
+	VerifyURL   string
 }
 
 type ReportExportRecord struct {

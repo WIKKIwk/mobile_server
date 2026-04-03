@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -2332,8 +2331,17 @@ func TestServerWerkaArchivePDFSentDaily(t *testing.T) {
 	if got := resp.Header().Get("Content-Disposition"); !strings.Contains(got, ".pdf") {
 		t.Fatalf("unexpected content disposition: %q", got)
 	}
+	if got := resp.Header().Get("X-Archive-Report-ID"); strings.TrimSpace(got) == "" {
+		t.Fatalf("expected report id header, got %q", got)
+	}
+	if got := resp.Header().Get("X-Archive-Verify-Code"); strings.TrimSpace(got) == "" {
+		t.Fatalf("expected verify code header, got %q", got)
+	}
 	if !bytes.HasPrefix(resp.Body.Bytes(), []byte("%PDF-")) {
 		t.Fatalf("expected pdf prefix, got %q", resp.Body.Bytes()[:8])
+	}
+	if bytes.Contains(resp.Body.Bytes(), []byte("ACCORD ARCHIVE REPORT")) {
+		t.Fatalf("expected flattened raster pdf without selectable title text")
 	}
 }
 
@@ -2388,16 +2396,15 @@ func TestServerWerkaArchivePDFVerifyFlow(t *testing.T) {
 	if pdfResp.Code != http.StatusOK {
 		t.Fatalf("unexpected pdf status: %d body=%s", pdfResp.Code, pdfResp.Body.String())
 	}
-	content := string(pdfResp.Body.Bytes())
-	reportIDMatch := regexp.MustCompile(`Report ID: ([A-Z0-9-]+)`).FindStringSubmatch(content)
-	verifyCodeMatch := regexp.MustCompile(`Verify code: ([A-Z0-9-]+)`).FindStringSubmatch(content)
-	if len(reportIDMatch) < 2 || len(verifyCodeMatch) < 2 {
-		t.Fatalf("expected report id and verify code in pdf body")
+	reportID := strings.TrimSpace(pdfResp.Header().Get("X-Archive-Report-ID"))
+	verifyCode := strings.TrimSpace(pdfResp.Header().Get("X-Archive-Verify-Code"))
+	if reportID == "" || verifyCode == "" {
+		t.Fatalf("expected report id and verify code headers")
 	}
 
 	verifyReq := httptest.NewRequest(
 		http.MethodGet,
-		"/v1/mobile/werka/archive/pdf/verify?id="+reportIDMatch[1]+"&code="+verifyCodeMatch[1],
+		"/v1/mobile/werka/archive/pdf/verify?id="+reportID+"&code="+verifyCode,
 		nil,
 	)
 	verifyResp := httptest.NewRecorder()
@@ -2415,7 +2422,7 @@ func TestServerWerkaArchivePDFVerifyFlow(t *testing.T) {
 
 	invalidReq := httptest.NewRequest(
 		http.MethodGet,
-		"/v1/mobile/werka/archive/pdf/verify?id="+reportIDMatch[1]+"&code=WRONG-CODE",
+		"/v1/mobile/werka/archive/pdf/verify?id="+reportID+"&code=WRONG-CODE",
 		nil,
 	)
 	invalidResp := httptest.NewRecorder()
