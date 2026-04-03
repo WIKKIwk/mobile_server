@@ -794,8 +794,121 @@ func (r *Reader) WerkaNotifications(ctx context.Context) ([]core.DispatchRecord,
 	return result, nil
 }
 
+func (r *Reader) WerkaArchive(ctx context.Context, kind core.WerkaArchiveKind, from, to time.Time) ([]core.DispatchRecord, error) {
+	switch kind {
+	case core.WerkaArchiveKindReceived:
+		rows, err := r.telegramReceiptRowsBetween(ctx, "", from, to, 2000)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]core.DispatchRecord, 0, len(rows))
+		for _, row := range rows {
+			record := purchaseReceiptRowToDispatchRecord(row)
+			if !archiveRecordMatchesKind(kind, record) {
+				continue
+			}
+			result = append(result, record)
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].CreatedLabel > result[j].CreatedLabel
+		})
+		return result, nil
+	case core.WerkaArchiveKindSent, core.WerkaArchiveKindReturned:
+		rows, err := r.deliveryNoteRowsBetween(ctx, "", from, to, 2000)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]core.DispatchRecord, 0, len(rows))
+		for _, row := range rows {
+			if !deliveryVisible(row) {
+				continue
+			}
+			record := deliveryNoteRowToDispatchRecord(row)
+			if !archiveRecordMatchesKind(kind, record) {
+				continue
+			}
+			result = append(result, record)
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].CreatedLabel > result[j].CreatedLabel
+		})
+		return result, nil
+	default:
+		return nil, core.ErrInvalidInput
+	}
+}
+
 func (r *Reader) telegramReceiptRows(ctx context.Context, supplierRef string) ([]purchaseReceiptSummaryRow, error) {
 	return r.telegramReceiptRowsLimited(ctx, supplierRef, 0)
+}
+
+func (r *Reader) telegramReceiptRowsBetween(ctx context.Context, supplierRef string, from, to time.Time, limit int) ([]purchaseReceiptSummaryRow, error) {
+	limit = clampLimit(limit, 0, 5000)
+	query := `
+		SELECT
+			pr.name,
+			pr.supplier,
+			COALESCE(pr.supplier_name, ''),
+			pr.docstatus,
+			COALESCE(pr.status, ''),
+			COALESCE(pr.total_qty, 0),
+			COALESCE(CAST(pr.posting_date AS CHAR), ''),
+			COALESCE(pr.supplier_delivery_note, ''),
+			COALESCE(pr.remarks, ''),
+			COALESCE(pr.currency, ''),
+			COALESCE(pri.item_code, ''),
+			COALESCE(pri.item_name, ''),
+			COALESCE(pri.uom, ''),
+			COALESCE(pri.amount, 0)
+		FROM ` + "`tabPurchase Receipt`" + ` pr
+		LEFT JOIN ` + "`tabPurchase Receipt Item`" + ` pri ON pri.parent = pr.name AND pri.idx = 1
+		WHERE pr.supplier_delivery_note LIKE 'TG:%'
+		  AND (? = '' OR pr.supplier = ?)
+		  AND pr.posting_date >= ?
+		  AND pr.posting_date <= ?
+		ORDER BY pr.name DESC`
+	if limit > 0 {
+		query += "\n\t\tLIMIT ?"
+	}
+	args := []interface{}{
+		strings.TrimSpace(supplierRef),
+		strings.TrimSpace(supplierRef),
+		from.In(time.UTC).Format("2006-01-02"),
+		to.In(time.UTC).Format("2006-01-02"),
+	}
+	if limit > 0 {
+		args = append(args, limit)
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]purchaseReceiptSummaryRow, 0, 64)
+	for rows.Next() {
+		var row purchaseReceiptSummaryRow
+		if err := rows.Scan(
+			&row.Name,
+			&row.Supplier,
+			&row.SupplierName,
+			&row.DocStatus,
+			&row.Status,
+			&row.TotalQty,
+			&row.PostingDate,
+			&row.SupplierDeliveryNote,
+			&row.Remarks,
+			&row.Currency,
+			&row.ItemCode,
+			&row.ItemName,
+			&row.UOM,
+			&row.Amount,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 func (r *Reader) telegramReceiptRowsLimited(ctx context.Context, supplierRef string, limit int) ([]purchaseReceiptSummaryRow, error) {
@@ -862,6 +975,72 @@ func (r *Reader) telegramReceiptRowsLimited(ctx context.Context, supplierRef str
 
 func (r *Reader) deliveryNoteRows(ctx context.Context, customerRef string) ([]deliveryNoteSummaryRow, error) {
 	return r.deliveryNoteRowsLimited(ctx, customerRef, 0)
+}
+
+func (r *Reader) deliveryNoteRowsBetween(ctx context.Context, customerRef string, from, to time.Time, limit int) ([]deliveryNoteSummaryRow, error) {
+	limit = clampLimit(limit, 0, 5000)
+	query := `
+		SELECT
+			dn.name,
+			dn.customer,
+			COALESCE(dn.customer_name, ''),
+			dn.docstatus,
+			COALESCE(CAST(dn.modified AS CHAR), ''),
+			COALESCE(dn.total_qty, 0),
+			COALESCE(dni.returned_qty, 0),
+			COALESCE(dn.accord_customer_reason, ''),
+			COALESCE(dni.item_code, ''),
+			COALESCE(dni.item_name, ''),
+			COALESCE(dni.uom, ''),
+			COALESCE(dn.accord_flow_state, 0),
+			COALESCE(dn.accord_customer_state, 0)
+		FROM ` + "`tabDelivery Note`" + ` dn
+		LEFT JOIN ` + "`tabDelivery Note Item`" + ` dni ON dni.parent = dn.name AND dni.idx = 1
+		WHERE (? = '' OR dn.customer = ?)
+		  AND dn.modified >= ?
+		  AND dn.modified <= ?
+		ORDER BY dn.name DESC`
+	if limit > 0 {
+		query += "\n\t\tLIMIT ?"
+	}
+	args := []interface{}{
+		strings.TrimSpace(customerRef),
+		strings.TrimSpace(customerRef),
+		from.Format("2006-01-02 15:04:05"),
+		to.Format("2006-01-02 15:04:05"),
+	}
+	if limit > 0 {
+		args = append(args, limit)
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]deliveryNoteSummaryRow, 0, 64)
+	for rows.Next() {
+		var row deliveryNoteSummaryRow
+		if err := rows.Scan(
+			&row.Name,
+			&row.Customer,
+			&row.CustomerName,
+			&row.DocStatus,
+			&row.Modified,
+			&row.Qty,
+			&row.ReturnedQty,
+			&row.CustomerReason,
+			&row.ItemCode,
+			&row.ItemName,
+			&row.UOM,
+			&row.AccordFlowState,
+			&row.AccordCustomerState,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 func (r *Reader) deliveryNoteRowsLimited(ctx context.Context, customerRef string, limit int) ([]deliveryNoteSummaryRow, error) {
@@ -1166,6 +1345,23 @@ func buildWerkaUnannouncedNotificationDispatch(row purchaseReceiptSummaryRow) (c
 		return record, true
 	default:
 		return core.DispatchRecord{}, false
+	}
+}
+
+func archiveRecordMatchesKind(kind core.WerkaArchiveKind, record core.DispatchRecord) bool {
+	switch kind {
+	case core.WerkaArchiveKindReceived:
+		return record.RecordType == "purchase_receipt" &&
+			(record.Status == "accepted" || record.Status == "partial")
+	case core.WerkaArchiveKindSent:
+		return record.RecordType == "delivery_note"
+	case core.WerkaArchiveKindReturned:
+		return record.RecordType == "delivery_note" &&
+			(record.Status == "partial" ||
+				record.Status == "rejected" ||
+				record.Status == "cancelled")
+	default:
+		return false
 	}
 }
 

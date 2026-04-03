@@ -75,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/status-breakdown", s.handleWerkaStatusBreakdown)
 	mux.HandleFunc("/v1/mobile/werka/status-details", s.handleWerkaStatusDetails)
 	mux.HandleFunc("/v1/mobile/werka/pending", s.handleWerkaPending)
+	mux.HandleFunc("/v1/mobile/werka/archive", s.handleWerkaArchive)
 	mux.HandleFunc("/v1/mobile/werka/notifications", s.handleWerkaNotifications)
 	mux.HandleFunc("/v1/mobile/werka/history", s.handleWerkaHistory)
 	mux.HandleFunc("/v1/mobile/werka/confirm", s.handleWerkaConfirm)
@@ -1362,6 +1363,30 @@ func (s *Server) handleWerkaNotifications(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleWerkaArchive(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	kind := WerkaArchiveKind(strings.TrimSpace(r.URL.Query().Get("kind")))
+	period := WerkaArchivePeriod(strings.TrimSpace(r.URL.Query().Get("period")))
+	response, err := s.auth.WerkaArchive(r.Context(), kind, period)
+	if err != nil {
+		if errors.Is(err, ErrInvalidInput) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "werka archive failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleWerkaConfirm(w http.ResponseWriter, r *http.Request) {

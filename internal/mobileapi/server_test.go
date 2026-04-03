@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"mobile_server/internal/erpnext"
 	"mobile_server/internal/suplier"
@@ -2181,6 +2182,95 @@ func TestServerWerkaNotificationsFlow(t *testing.T) {
 	}
 	if !eventTypes["werka_unannounced_rejected"] {
 		t.Fatalf("expected unannounced rejected notification, got %+v", items)
+	}
+}
+
+func TestServerWerkaArchiveSentDaily(t *testing.T) {
+	now := time.Now().In(time.FixedZone("Asia/Tashkent", 5*60*60))
+	today := now.Format("2006-01-02 15:04:05")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
+
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			customers: []erpnext.Customer{
+				{ID: "CUS-001", Name: "Customer One"},
+			},
+			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
+				{
+					Name:                "MAT-DN-TODAY",
+					Customer:            "CUS-001",
+					CustomerName:        "Customer One",
+					ItemCode:            "ITEM-001",
+					ItemName:            "Rice",
+					Qty:                 3,
+					UOM:                 "Kg",
+					Modified:            today,
+					DocStatus:           1,
+					AccordFlowState:     "1",
+					AccordCustomerState: "1",
+				},
+				{
+					Name:                "MAT-DN-YESTERDAY",
+					Customer:            "CUS-001",
+					CustomerName:        "Customer One",
+					ItemCode:            "ITEM-002",
+					ItemName:            "Oil",
+					Qty:                 5,
+					UOM:                 "Kg",
+					Modified:            yesterday,
+					DocStatus:           1,
+					AccordFlowState:     "1",
+					AccordCustomerState: "1",
+				},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleWerka,
+		DisplayName: "Werka",
+		Ref:         "werka",
+	})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/archive?kind=sent&period=daily", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var result WerkaArchiveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode archive response: %v", err)
+	}
+	if result.Kind != "sent" || result.Period != "daily" {
+		t.Fatalf("unexpected archive envelope: %+v", result)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 daily sent item, got %+v", result.Items)
+	}
+	if result.Items[0].ID != "MAT-DN-TODAY" {
+		t.Fatalf("unexpected daily sent item: %+v", result.Items[0])
+	}
+	if result.Summary.RecordCount != 1 {
+		t.Fatalf("unexpected summary count: %+v", result.Summary)
+	}
+	if len(result.Summary.TotalsByUOM) != 1 || result.Summary.TotalsByUOM[0].Qty != 3 {
+		t.Fatalf("unexpected uom totals: %+v", result.Summary.TotalsByUOM)
 	}
 }
 

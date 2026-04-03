@@ -1,6 +1,9 @@
 package core
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type PrincipalRole string
 
@@ -153,6 +156,41 @@ type WerkaStatusBreakdownEntry struct {
 	TotalAcceptedQty float64 `json:"total_accepted_qty"`
 	TotalReturnedQty float64 `json:"total_returned_qty"`
 	UOM              string  `json:"uom"`
+}
+
+type WerkaArchiveKind string
+
+const (
+	WerkaArchiveKindReceived WerkaArchiveKind = "received"
+	WerkaArchiveKindSent     WerkaArchiveKind = "sent"
+	WerkaArchiveKindReturned WerkaArchiveKind = "returned"
+)
+
+type WerkaArchivePeriod string
+
+const (
+	WerkaArchivePeriodDaily   WerkaArchivePeriod = "daily"
+	WerkaArchivePeriodMonthly WerkaArchivePeriod = "monthly"
+	WerkaArchivePeriodYearly  WerkaArchivePeriod = "yearly"
+)
+
+type ArchiveTotalByUOM struct {
+	UOM string  `json:"uom"`
+	Qty float64 `json:"qty"`
+}
+
+type WerkaArchiveSummary struct {
+	RecordCount int                 `json:"record_count"`
+	TotalsByUOM []ArchiveTotalByUOM `json:"totals_by_uom"`
+}
+
+type WerkaArchiveResponse struct {
+	Kind    WerkaArchiveKind    `json:"kind"`
+	Period  WerkaArchivePeriod  `json:"period"`
+	From    time.Time           `json:"from"`
+	To      time.Time           `json:"to"`
+	Summary WerkaArchiveSummary `json:"summary"`
+	Items   []DispatchRecord    `json:"items"`
 }
 
 type CreateDispatchRequest struct {

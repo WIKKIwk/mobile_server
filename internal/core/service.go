@@ -114,6 +114,7 @@ type DirectoryReader interface {
 	WerkaStatusDetails(ctx context.Context, kind, supplierRef string) ([]DispatchRecord, error)
 	WerkaHistory(ctx context.Context) ([]DispatchRecord, error)
 	WerkaNotifications(ctx context.Context) ([]DispatchRecord, error)
+	WerkaArchive(ctx context.Context, kind WerkaArchiveKind, from, to time.Time) ([]DispatchRecord, error)
 	SearchWerkaSuppliersPage(ctx context.Context, query string, limit, offset int) ([]SupplierDirectoryEntry, error)
 	SearchWerkaCustomersPage(ctx context.Context, query string, limit, offset int) ([]CustomerDirectoryEntry, error)
 	SearchWerkaSupplierItemsPage(ctx context.Context, supplierRef, query string, limit, offset int) ([]SupplierItem, error)
@@ -831,6 +832,101 @@ func (a *ERPAuthenticator) WerkaNotifications(ctx context.Context) ([]DispatchRe
 	return a.collectWerkaNotificationRecords(ctx)
 }
 
+func (a *ERPAuthenticator) WerkaArchive(ctx context.Context, kind WerkaArchiveKind, period WerkaArchivePeriod) (WerkaArchiveResponse, error) {
+	from, to, err := resolveWerkaArchiveRange(period)
+	if err != nil {
+		return WerkaArchiveResponse{}, err
+	}
+
+	var items []DispatchRecord
+	if a.reader != nil {
+		readerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		items, err = a.reader.WerkaArchive(readerCtx, kind, from, to)
+		if err == nil {
+			return buildWerkaArchiveResponse(kind, period, from, to, items), nil
+		}
+	}
+
+	items, err = a.collectWerkaArchiveRecords(ctx, kind, from, to)
+	if err != nil {
+		return WerkaArchiveResponse{}, err
+	}
+	return buildWerkaArchiveResponse(kind, period, from, to, items), nil
+}
+
+func resolveWerkaArchiveRange(period WerkaArchivePeriod) (time.Time, time.Time, error) {
+	location, err := time.LoadLocation("Asia/Tashkent")
+	if err != nil {
+		location = time.FixedZone("Asia/Tashkent", 5*60*60)
+	}
+	now := time.Now().In(location)
+	end := now
+	switch period {
+	case WerkaArchivePeriodDaily:
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+		return start, end, nil
+	case WerkaArchivePeriodMonthly:
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, location)
+		return start, end, nil
+	case WerkaArchivePeriodYearly:
+		return now.AddDate(-1, 0, 0), end, nil
+	default:
+		return time.Time{}, time.Time{}, ErrInvalidInput
+	}
+}
+
+func buildWerkaArchiveResponse(kind WerkaArchiveKind, period WerkaArchivePeriod, from, to time.Time, items []DispatchRecord) WerkaArchiveResponse {
+	totalsByUOM := map[string]float64{}
+	for _, item := range items {
+		uom := strings.TrimSpace(item.UOM)
+		if uom == "" {
+			uom = strings.TrimSpace(item.UOM)
+		}
+		if uom == "" {
+			uom = "-"
+		}
+		totalsByUOM[uom] += archiveQtyForKind(kind, item)
+	}
+
+	totals := make([]ArchiveTotalByUOM, 0, len(totalsByUOM))
+	for uom, qty := range totalsByUOM {
+		totals = append(totals, ArchiveTotalByUOM{
+			UOM: uom,
+			Qty: qty,
+		})
+	}
+	sort.Slice(totals, func(i, j int) bool {
+		return totals[i].UOM < totals[j].UOM
+	})
+
+	return WerkaArchiveResponse{
+		Kind:   kind,
+		Period: period,
+		From:   from,
+		To:     to,
+		Summary: WerkaArchiveSummary{
+			RecordCount: len(items),
+			TotalsByUOM: totals,
+		},
+		Items: items,
+	}
+}
+
+func archiveQtyForKind(kind WerkaArchiveKind, item DispatchRecord) float64 {
+	switch kind {
+	case WerkaArchiveKindReceived:
+		if item.AcceptedQty > 0 {
+			return item.AcceptedQty
+		}
+		return item.SentQty
+	case WerkaArchiveKindReturned:
+		return maxFloat(item.SentQty-item.AcceptedQty, 0)
+	default:
+		return item.SentQty
+	}
+}
+
 func (a *ERPAuthenticator) collectWerkaHistoryRecords(ctx context.Context) ([]DispatchRecord, error) {
 	items, err := a.collectTelegramPurchaseReceipts(ctx)
 	if err != nil {
@@ -934,6 +1030,108 @@ func (a *ERPAuthenticator) collectWerkaNotificationRecords(ctx context.Context) 
 		return result[i].CreatedLabel > result[j].CreatedLabel
 	})
 	return result, nil
+}
+
+func (a *ERPAuthenticator) collectWerkaArchiveRecords(ctx context.Context, kind WerkaArchiveKind, from, to time.Time) ([]DispatchRecord, error) {
+	switch kind {
+	case WerkaArchiveKindReceived:
+		items, err := a.collectTelegramPurchaseReceipts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]DispatchRecord, 0, len(items))
+		for _, item := range items {
+			record := mapPurchaseReceiptToDispatchRecord(item, item.SupplierName)
+			if !archiveRecordMatchesKind(kind, record) {
+				continue
+			}
+			timestamp, ok := parseArchiveTime(record.CreatedLabel, from.Location())
+			if !ok || timestamp.Before(from) || timestamp.After(to) {
+				continue
+			}
+			result = append(result, record)
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].CreatedLabel > result[j].CreatedLabel
+		})
+		return result, nil
+	case WerkaArchiveKindSent, WerkaArchiveKindReturned:
+		customers, err := a.erp.SearchCustomers(ctx, a.baseURL, a.apiKey, a.apiSecret, "", 500)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]DispatchRecord, 0, 128)
+		for _, customer := range customers {
+			deliveryNotes, err := a.collectCustomerDeliveryNotes(ctx, customer.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range deliveryNotes {
+				if !customerDeliveryVisible(item) {
+					continue
+				}
+				record := mapDeliveryNoteToDispatchRecord(item)
+				if !archiveRecordMatchesKind(kind, record) {
+					continue
+				}
+				timestamp, ok := parseArchiveTime(record.CreatedLabel, from.Location())
+				if !ok || timestamp.Before(from) || timestamp.After(to) {
+					continue
+				}
+				result = append(result, record)
+			}
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].CreatedLabel > result[j].CreatedLabel
+		})
+		return result, nil
+	default:
+		return nil, ErrInvalidInput
+	}
+}
+
+func archiveRecordMatchesKind(kind WerkaArchiveKind, record DispatchRecord) bool {
+	switch kind {
+	case WerkaArchiveKindReceived:
+		return record.RecordType == "purchase_receipt" &&
+			(record.Status == "accepted" || record.Status == "partial")
+	case WerkaArchiveKindSent:
+		return record.RecordType == "delivery_note"
+	case WerkaArchiveKindReturned:
+		return record.RecordType == "delivery_note" &&
+			(record.Status == "partial" ||
+				record.Status == "rejected" ||
+				record.Status == "cancelled")
+	default:
+		return false
+	}
+}
+
+func parseArchiveTime(value string, location *time.Location) (time.Time, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		var parsed time.Time
+		var err error
+		if layout == time.RFC3339Nano || layout == time.RFC3339 {
+			parsed, err = time.Parse(layout, trimmed)
+		} else {
+			parsed, err = time.ParseInLocation(layout, trimmed, location)
+		}
+		if err == nil {
+			return parsed.In(location), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (a *ERPAuthenticator) customerResultEvents(ctx context.Context) ([]DispatchRecord, error) {
