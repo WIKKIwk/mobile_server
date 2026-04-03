@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -2333,6 +2334,119 @@ func TestServerWerkaArchivePDFSentDaily(t *testing.T) {
 	}
 	if !bytes.HasPrefix(resp.Body.Bytes(), []byte("%PDF-")) {
 		t.Fatalf("expected pdf prefix, got %q", resp.Body.Bytes()[:8])
+	}
+}
+
+func TestServerWerkaArchivePDFVerifyFlow(t *testing.T) {
+	now := time.Now().In(time.FixedZone("Asia/Tashkent", 5*60*60))
+	server := NewServer(NewERPAuthenticator(
+		&fakeERPClient{
+			customers: []erpnext.Customer{
+				{ID: "CUS-001", Name: "Customer One"},
+			},
+			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
+				{
+					Name:                "MAT-DN-TODAY",
+					Customer:            "CUS-001",
+					CustomerName:        "Customer One",
+					ItemCode:            "ITEM-001",
+					ItemName:            "Rice",
+					Qty:                 3,
+					UOM:                 "Kg",
+					Modified:            now.Format("2006-01-02 15:04:05"),
+					DocStatus:           1,
+					AccordFlowState:     "1",
+					AccordCustomerState: "1",
+				},
+			},
+		},
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleWerka,
+		DisplayName: "Werka",
+		Ref:         "werka",
+	})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	pdfReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/werka/archive/pdf?kind=sent&period=daily", nil)
+	pdfReq.Header.Set("Authorization", "Bearer "+token)
+	pdfResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pdfResp, pdfReq)
+	if pdfResp.Code != http.StatusOK {
+		t.Fatalf("unexpected pdf status: %d body=%s", pdfResp.Code, pdfResp.Body.String())
+	}
+	content := string(pdfResp.Body.Bytes())
+	reportIDMatch := regexp.MustCompile(`Report ID: ([A-Z0-9-]+)`).FindStringSubmatch(content)
+	verifyCodeMatch := regexp.MustCompile(`Verify code: ([A-Z0-9-]+)`).FindStringSubmatch(content)
+	if len(reportIDMatch) < 2 || len(verifyCodeMatch) < 2 {
+		t.Fatalf("expected report id and verify code in pdf body")
+	}
+
+	verifyReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/mobile/werka/archive/pdf/verify?id="+reportIDMatch[1]+"&code="+verifyCodeMatch[1],
+		nil,
+	)
+	verifyResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(verifyResp, verifyReq)
+	if verifyResp.Code != http.StatusOK {
+		t.Fatalf("unexpected verify status: %d body=%s", verifyResp.Code, verifyResp.Body.String())
+	}
+	var valid ReportVerifyResponse
+	if err := json.NewDecoder(verifyResp.Body).Decode(&valid); err != nil {
+		t.Fatalf("decode verify response: %v", err)
+	}
+	if !valid.Valid || valid.Status != "valid" {
+		t.Fatalf("expected valid verify response, got %+v", valid)
+	}
+
+	invalidReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/mobile/werka/archive/pdf/verify?id="+reportIDMatch[1]+"&code=WRONG-CODE",
+		nil,
+	)
+	invalidResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResp, invalidReq)
+	if invalidResp.Code != http.StatusOK {
+		t.Fatalf("unexpected invalid verify status: %d body=%s", invalidResp.Code, invalidResp.Body.String())
+	}
+	var invalid ReportVerifyResponse
+	if err := json.NewDecoder(invalidResp.Body).Decode(&invalid); err != nil {
+		t.Fatalf("decode invalid verify response: %v", err)
+	}
+	if invalid.Valid || invalid.Status != "invalid_code" {
+		t.Fatalf("expected invalid_code response, got %+v", invalid)
+	}
+
+	missingReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/mobile/werka/archive/pdf/verify?id=WAR-MISSING&code=ABCD-1234-EFGH",
+		nil,
+	)
+	missingResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResp, missingReq)
+	if missingResp.Code != http.StatusOK {
+		t.Fatalf("unexpected missing verify status: %d body=%s", missingResp.Code, missingResp.Body.String())
+	}
+	var missing ReportVerifyResponse
+	if err := json.NewDecoder(missingResp.Body).Decode(&missing); err != nil {
+		t.Fatalf("decode missing verify response: %v", err)
+	}
+	if missing.Valid || missing.Status != "not_found" {
+		t.Fatalf("expected not_found response, got %+v", missing)
 	}
 }
 

@@ -199,6 +199,38 @@ type GeneratedFile struct {
 	Body        []byte
 }
 
+type ReportExportRecord struct {
+	ReportID        string             `json:"report_id"`
+	VerifyCode      string             `json:"verify_code"`
+	Kind            WerkaArchiveKind   `json:"kind"`
+	Period          WerkaArchivePeriod `json:"period"`
+	From            time.Time          `json:"from"`
+	To              time.Time          `json:"to"`
+	GeneratedAt     time.Time          `json:"generated_at"`
+	GeneratedByRole PrincipalRole      `json:"generated_by_role"`
+	GeneratedByRef  string             `json:"generated_by_ref"`
+	GeneratedByName string             `json:"generated_by_name"`
+	DatasetHash     string             `json:"dataset_hash"`
+	RecordCount     int                `json:"record_count"`
+}
+
+type ReportVerifyResponse struct {
+	Valid           bool               `json:"valid"`
+	ReportID        string             `json:"report_id,omitempty"`
+	VerifyCode      string             `json:"verify_code,omitempty"`
+	Kind            WerkaArchiveKind   `json:"kind,omitempty"`
+	Period          WerkaArchivePeriod `json:"period,omitempty"`
+	From            time.Time          `json:"from,omitempty"`
+	To              time.Time          `json:"to,omitempty"`
+	GeneratedAt     time.Time          `json:"generated_at,omitempty"`
+	GeneratedByRole PrincipalRole      `json:"generated_by_role,omitempty"`
+	GeneratedByRef  string             `json:"generated_by_ref,omitempty"`
+	GeneratedByName string             `json:"generated_by_name,omitempty"`
+	DatasetHash     string             `json:"dataset_hash,omitempty"`
+	RecordCount     int                `json:"record_count,omitempty"`
+	Status          string             `json:"status,omitempty"`
+}
+
 type CreateDispatchRequest struct {
 	ItemCode string  `json:"item_code"`
 	Qty      float64 `json:"qty"`

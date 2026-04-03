@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/pending", s.handleWerkaPending)
 	mux.HandleFunc("/v1/mobile/werka/archive", s.handleWerkaArchive)
 	mux.HandleFunc("/v1/mobile/werka/archive/pdf", s.handleWerkaArchivePDF)
+	mux.HandleFunc("/v1/mobile/werka/archive/pdf/verify", s.handleWerkaArchivePDFVerify)
 	mux.HandleFunc("/v1/mobile/werka/notifications", s.handleWerkaNotifications)
 	mux.HandleFunc("/v1/mobile/werka/history", s.handleWerkaHistory)
 	mux.HandleFunc("/v1/mobile/werka/confirm", s.handleWerkaConfirm)
@@ -1420,6 +1421,25 @@ func (s *Server) handleWerkaArchivePDF(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(file.Body)
+}
+
+func (s *Server) handleWerkaArchivePDFVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	reportID := strings.TrimSpace(r.URL.Query().Get("id"))
+	verifyCode := strings.TrimSpace(r.URL.Query().Get("code"))
+	if reportID == "" || verifyCode == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id and code are required"})
+		return
+	}
+	result, err := s.auth.VerifyArchiveReport(reportID, verifyCode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "archive pdf verify failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleWerkaConfirm(w http.ResponseWriter, r *http.Request) {

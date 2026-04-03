@@ -34,6 +34,7 @@ type WerkaArchivePeriod = core.WerkaArchivePeriod
 type ArchiveTotalByUOM = core.ArchiveTotalByUOM
 type WerkaArchiveSummary = core.WerkaArchiveSummary
 type WerkaArchiveResponse = core.WerkaArchiveResponse
+type ReportVerifyResponse = core.ReportVerifyResponse
 type CreateDispatchRequest = core.CreateDispatchRequest
 type ConfirmReceiptRequest = core.ConfirmReceiptRequest
 type WerkaUnannouncedCreateRequest = core.WerkaUnannouncedCreateRequest

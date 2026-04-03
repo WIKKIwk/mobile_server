@@ -142,6 +142,7 @@ type ERPAuthenticator struct {
 	adminName         string
 	adminCode         string
 	profiles          *ProfileStore
+	reportExports     *ReportExportStore
 	supplierAdmin     *AdminSupplierStore
 	envPersister      EnvPersister
 	warehouseMu       sync.RWMutex
@@ -215,6 +216,7 @@ func NewERPAuthenticator(
 		werkaPhone:       strings.TrimSpace(werkaPhone),
 		werkaName:        strings.TrimSpace(werkaName),
 		profiles:         profiles,
+		reportExports:    NewReportExportStore("data/report_exports.json"),
 		supplierAdmin:    supplierAdmin,
 	}
 }
