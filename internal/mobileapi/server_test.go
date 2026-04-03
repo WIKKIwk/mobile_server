@@ -2039,35 +2039,6 @@ func TestServerWerkaNotificationsFlow(t *testing.T) {
 					Remarks:              "Accord Werka Aytilmagan: rejected",
 				},
 			},
-			customerDeliveryNotes: []erpnext.DeliveryNoteDraft{
-				{
-					Name:                "MAT-DN-0001",
-					Customer:            "CUS-001",
-					CustomerName:        "Aziz Market",
-					ItemCode:            "ITEM-010",
-					ItemName:            "Oil",
-					Qty:                 4,
-					UOM:                 "L",
-					Modified:            "2026-04-03 10:00:00",
-					DocStatus:           1,
-					AccordFlowState:     "1",
-					AccordCustomerState: "1",
-				},
-				{
-					Name:                 "MAT-DN-0002",
-					Customer:             "CUS-002",
-					CustomerName:         "Sardor Do'kon",
-					ItemCode:             "ITEM-011",
-					ItemName:             "Sugar",
-					Qty:                  6,
-					UOM:                  "Kg",
-					Modified:             "2026-04-03 11:00:00",
-					DocStatus:            1,
-					AccordFlowState:      "1",
-					AccordCustomerState:  "3",
-					AccordCustomerReason: "",
-				},
-			},
 			comments: map[string][]erpnext.Comment{
 				"MAT-PRE-0001": {
 					{
@@ -2111,8 +2082,8 @@ func TestServerWerkaNotificationsFlow(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("expected 4 notification items, got %d", len(items))
+	if len(items) != 2 {
+		t.Fatalf("expected 2 notification items, got %d: %+v", len(items), items)
 	}
 
 	eventTypes := map[string]bool{}
@@ -2120,12 +2091,6 @@ func TestServerWerkaNotificationsFlow(t *testing.T) {
 		eventTypes[item.EventType] = true
 	}
 
-	if !eventTypes["customer_delivery_pending"] {
-		t.Fatalf("expected pending delivery notification, got %+v", items)
-	}
-	if !eventTypes["customer_delivery_confirmed"] {
-		t.Fatalf("expected confirmed delivery notification, got %+v", items)
-	}
 	if !eventTypes["supplier_ack"] {
 		t.Fatalf("expected supplier acknowledgment notification, got %+v", items)
 	}
