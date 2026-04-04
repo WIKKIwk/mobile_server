@@ -81,10 +81,7 @@ func (a *ERPAuthenticator) VerifyArchiveReport(reportID, verifyCode string) (Rep
 		return ReportVerifyResponse{}, err
 	}
 	if strings.TrimSpace(record.ReportID) == "" {
-		return ReportVerifyResponse{
-			Valid:  false,
-			Status: "not_found",
-		}, nil
+		return ReportVerifyResponse{Valid: false, Status: "not_found"}, nil
 	}
 	if strings.TrimSpace(record.VerifyCode) != strings.TrimSpace(verifyCode) {
 		return ReportVerifyResponse{
@@ -134,61 +131,60 @@ func buildArchiveVerifyURL(reportID, verifyCode string) string {
 		"&code=" + url.QueryEscape(strings.TrimSpace(verifyCode))
 }
 
-type textStyle struct {
+type archiveTextStyle struct {
 	face  font.Face
 	color color.Color
 }
 
-type tableRow struct {
-	date     string
-	docID    string
-	party    string
-	item     string
-	qty      string
-	status   string
-	itemName string
-}
-
-type fontPack struct {
-	title      font.Face
-	subtitle   font.Face
-	body       font.Face
-	bodyTight  font.Face
-	small      font.Face
-	smallTight font.Face
-	bold       font.Face
-	boldTight  font.Face
-	watermark  font.Face
+type archiveFonts struct {
+	title    font.Face
+	subtitle font.Face
+	header   font.Face
+	body     font.Face
+	bodyBold font.Face
+	meta     font.Face
+	footer   font.Face
 }
 
 type archiveColumn struct {
 	label string
 	x     int
 	width int
+	align string
 }
 
-var (
-	dateColumn    = archiveColumn{label: "Sana", x: 60, width: 150}
-	docColumn     = archiveColumn{label: "Hujjat", x: 210, width: 185}
-	partyColumn   = archiveColumn{label: "Counterparty", x: 395, width: 165}
-	productColumn = archiveColumn{label: "Mahsulot", x: 560, width: 425}
-	qtyColumn     = archiveColumn{label: "Miqdor", x: 985, width: 110}
-	statusColumn  = archiveColumn{label: "Status", x: 1095, width: 85}
-)
+type archiveRow struct {
+	date   string
+	docID  string
+	party  string
+	item   string
+	qty    string
+	status string
+}
 
-var archiveColumns = []archiveColumn{
-	dateColumn,
-	docColumn,
-	partyColumn,
-	productColumn,
-	qtyColumn,
-	statusColumn,
+var corporateArchiveColumns = []archiveColumn{
+	{label: "Sana", x: 48, width: 145, align: "left"},
+	{label: "Hujjat", x: 193, width: 190, align: "left"},
+	{label: "Counterparty", x: 383, width: 220, align: "left"},
+	{label: "Mahsulot", x: 603, width: 355, align: "left"},
+	{label: "Miqdor", x: 958, width: 108, align: "right"},
+	{label: "Status", x: 1066, width: 126, align: "left"},
 }
 
 func renderArchivePages(principal Principal, report WerkaArchiveResponse, reportID, verifyCode, verifyURL string) ([]*image.RGBA, error) {
 	const (
-		pageWidth  = 1240
-		pageHeight = 1754
+		pageWidth      = 1240
+		pageHeight     = 1754
+		headerHeight   = 150
+		summaryHeight  = 74
+		tableHeadH     = 40
+		rowHeight      = 36
+		footerHeight   = 28
+		topMargin      = 44
+		leftMargin     = 48
+		contentWidth   = 1144
+		rowSpacing     = 0
+		tableBottomPad = 30
 	)
 
 	fonts, err := loadArchiveFonts()
@@ -196,8 +192,6 @@ func renderArchivePages(principal Principal, report WerkaArchiveResponse, report
 		return nil, err
 	}
 
-	reportTitle := archiveReportTitle(report.Kind)
-	periodTitle := archivePeriodTitle(report.Period)
 	generatedBy := strings.TrimSpace(principal.DisplayName)
 	if generatedBy == "" {
 		generatedBy = strings.TrimSpace(principal.Ref)
@@ -206,257 +200,219 @@ func renderArchivePages(principal Principal, report WerkaArchiveResponse, report
 		generatedBy = "Werka"
 	}
 
-	rows := make([]tableRow, 0, len(report.Items))
+	rows := make([]archiveRow, 0, len(report.Items))
 	for _, item := range report.Items {
-		rows = append(rows, tableRow{
-			date:     item.CreatedLabel,
-			docID:    item.ID,
-			party:    item.SupplierName,
-			item:     item.ItemCode,
-			qty:      fmt.Sprintf("%.2f %s", archiveQtyForKind(report.Kind, item), item.UOM),
-			status:   string(item.Status),
-			itemName: item.ItemName,
+		rows = append(rows, archiveRow{
+			date:   formatArchiveDateForCell(item.CreatedLabel),
+			docID:  item.ID,
+			party:  strings.TrimSpace(item.SupplierName),
+			item:   archiveProductName(item),
+			qty:    fmt.Sprintf("%.2f %s", archiveQtyForKind(report.Kind, item), strings.TrimSpace(item.UOM)),
+			status: archiveStatusLabel(item.Status),
 		})
 	}
 
+	reportTitle := archiveReportTitle(report.Kind)
+	periodTitle := archivePeriodTitle(report.Period)
 	pages := make([]*image.RGBA, 0, 4)
-	page, y := newArchivePage(pageWidth, pageHeight)
-	drawArchiveWatermark(page, fonts)
-	y = drawArchiveHeader(page, fonts, reportTitle, periodTitle, generatedBy, report, reportID, verifyCode, verifyURL, y)
-	y = drawArchiveSummary(page, fonts, report.Summary, y)
-	y = drawArchiveTableHeader(page, fonts, y)
-	for index, row := range rows {
-		height := archiveRowHeight(row, fonts)
-		if y+height > 1630 {
-		drawArchiveFooter(page, fonts, len(pages)+1, reportID, verifyCode)
-		pages = append(pages, page)
-		page, y = newArchivePage(pageWidth, pageHeight)
-		drawArchiveWatermark(page, fonts)
-			y = drawArchiveHeader(page, fonts, reportTitle, periodTitle, generatedBy, report, reportID, verifyCode, verifyURL, y)
-			y = drawArchiveSummary(page, fonts, report.Summary, y)
-			y = drawArchiveTableHeader(page, fonts, y)
-		}
-		drawArchiveRow(page, fonts, row, y, index%2 == 0)
-		y += height + 8
+
+	newPage := func() (*image.RGBA, int) {
+		page := image.NewRGBA(image.Rect(0, 0, pageWidth, pageHeight))
+		draw.Draw(page, page.Bounds(), &image.Uniform{color.RGBA{248, 249, 251, 255}}, image.Point{}, draw.Src)
+		y := topMargin
+
+		y = drawArchiveHeader(page, fonts, leftMargin, y, contentWidth, headerHeight, reportTitle, periodTitle, generatedBy, report, reportID, verifyCode)
+		y += 12
+		y = drawArchiveSummary(page, fonts, leftMargin, y, contentWidth, summaryHeight, report.Summary)
+		y += 12
+		y = drawArchiveTableHeader(page, fonts, y, tableHeadH)
+		return page, y
 	}
-	drawArchiveFooter(page, fonts, len(pages)+1, reportID, verifyCode)
+
+	page, y := newPage()
+	maxTableY := pageHeight - footerHeight - tableBottomPad
+	for idx, row := range rows {
+		if y+rowHeight > maxTableY {
+			drawArchiveFooter(page, fonts, leftMargin, pageHeight-footerHeight, contentWidth, len(pages)+1, reportID, verifyCode, verifyURL)
+			pages = append(pages, page)
+			page, y = newPage()
+		}
+		drawArchiveRow(page, fonts, row, y, rowHeight, idx%2 == 0)
+		y += rowHeight + rowSpacing
+	}
+	drawArchiveFooter(page, fonts, leftMargin, pageHeight-footerHeight, contentWidth, len(pages)+1, reportID, verifyCode, verifyURL)
 	pages = append(pages, page)
 	return pages, nil
 }
 
-func loadArchiveFonts() (fontPack, error) {
+func loadArchiveFonts() (archiveFonts, error) {
 	regularTTF, err := opentype.Parse(goregular.TTF)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
 	boldTTF, err := opentype.Parse(gobold.TTF)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	title, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 28, DPI: 144, Hinting: font.HintingFull})
+
+	makeFace := func(ttf *opentype.Font, size float64) (font.Face, error) {
+		return opentype.NewFace(ttf, &opentype.FaceOptions{Size: size, DPI: 144, Hinting: font.HintingFull})
+	}
+
+	title, err := makeFace(regularTTF, 22)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	subtitle, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 20, DPI: 144, Hinting: font.HintingFull})
+	subtitle, err := makeFace(regularTTF, 11)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	body, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 8, DPI: 144, Hinting: font.HintingFull})
+	header, err := makeFace(boldTTF, 9)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	bodyTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 6, DPI: 144, Hinting: font.HintingFull})
+	body, err := makeFace(regularTTF, 7)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	small, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 7, DPI: 144, Hinting: font.HintingFull})
+	bodyBold, err := makeFace(boldTTF, 7)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	smallTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 5, DPI: 144, Hinting: font.HintingFull})
+	meta, err := makeFace(regularTTF, 6)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	bold, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 8, DPI: 144, Hinting: font.HintingFull})
+	footer, err := makeFace(regularTTF, 5.5)
 	if err != nil {
-		return fontPack{}, err
+		return archiveFonts{}, err
 	}
-	boldTight, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 6, DPI: 144, Hinting: font.HintingFull})
-	if err != nil {
-		return fontPack{}, err
-	}
-	watermark, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 38, DPI: 144, Hinting: font.HintingFull})
-	if err != nil {
-		return fontPack{}, err
-	}
-	return fontPack{
-		title:      title,
-		subtitle:   subtitle,
-		body:       body,
-		bodyTight:  bodyTight,
-		small:      small,
-		smallTight: smallTight,
-		bold:       bold,
-		boldTight:  boldTight,
-		watermark:  watermark,
+	return archiveFonts{
+		title:    title,
+		subtitle: subtitle,
+		header:   header,
+		body:     body,
+		bodyBold: bodyBold,
+		meta:     meta,
+		footer:   footer,
 	}, nil
 }
 
-func newArchivePage(pageWidth, pageHeight int) (*image.RGBA, int) {
-	page := image.NewRGBA(image.Rect(0, 0, pageWidth, pageHeight))
-	draw.Draw(page, page.Bounds(), &image.Uniform{color.RGBA{250, 248, 244, 255}}, image.Point{}, draw.Src)
-	return page, 88
+func drawArchiveHeader(page *image.RGBA, fonts archiveFonts, x, y, width, height int, title, period, generatedBy string, report WerkaArchiveResponse, reportID, verifyCode string) int {
+	fillRect(page, x, y, width, height, color.RGBA{40, 54, 78, 255})
+	fillRect(page, x, y, width, 5, color.RGBA{38, 166, 154, 255})
+
+	light := color.RGBA{248, 250, 252, 255}
+	muted := color.RGBA{205, 214, 227, 255}
+	dark := color.RGBA{44, 56, 76, 255}
+
+	drawText(page, archiveTextStyle{face: fonts.header, color: muted}, x+18, y+24, "ACCORD ARCHIVE REPORT")
+	drawText(page, archiveTextStyle{face: fonts.title, color: light}, x+18, y+60, title)
+	drawText(page, archiveTextStyle{face: fonts.subtitle, color: light}, x+18, y+86, "Period: "+period)
+	drawText(page, archiveTextStyle{face: fonts.subtitle, color: light}, x+18, y+108, "Oraliq: "+report.From.Format("2006-01-02 15:04")+" -> "+report.To.Format("2006-01-02 15:04"))
+	drawText(page, archiveTextStyle{face: fonts.subtitle, color: light}, x+18, y+130, "Generated by: "+generatedBy)
+
+	panelX := x + width - 290
+	fillRect(page, panelX, y+16, 272, 116, color.RGBA{248, 250, 252, 255})
+	strokeRect(page, panelX, y+16, 272, 116, color.RGBA{197, 206, 219, 255})
+	drawText(page, archiveTextStyle{face: fonts.header, color: dark}, panelX+14, y+38, "Compliance Panel")
+	drawText(page, archiveTextStyle{face: fonts.meta, color: dark}, panelX+14, y+58, "Mode: Flattened static copy")
+	drawText(page, archiveTextStyle{face: fonts.meta, color: dark}, panelX+14, y+76, fitStringToWidth(&font.Drawer{Face: fonts.meta}, "Report ID: "+reportID, 244))
+	drawText(page, archiveTextStyle{face: fonts.meta, color: dark}, panelX+14, y+94, fitStringToWidth(&font.Drawer{Face: fonts.meta}, "Verify code: "+verifyCode, 244))
+
+	return y + height
 }
 
-func drawArchiveWatermark(page *image.RGBA, fonts fontPack) {
-	watermarkStyle := textStyle{
-		face:  fonts.watermark,
-		color: color.RGBA{140, 128, 108, 18},
-	}
-	lines := []struct {
-		x int
-		y int
-		s string
-	}{
-		{320, 420, "ACCORD ARCHIVE"},
-		{250, 820, "FLATTENED STATIC COPY"},
-		{320, 1220, "ACCORD ARCHIVE"},
-		{250, 1540, "VERIFY BEFORE TRUST"},
-	}
-	for _, line := range lines {
-		drawText(page, watermarkStyle, line.x, line.y, line.s)
-	}
-}
+func drawArchiveSummary(page *image.RGBA, fonts archiveFonts, x, y, width, height int, summary WerkaArchiveSummary) int {
+	fillRect(page, x, y, width, height, color.RGBA{241, 244, 248, 255})
+	strokeRect(page, x, y, width, height, color.RGBA{221, 227, 235, 255})
 
-func drawArchiveHeader(page *image.RGBA, fonts fontPack, reportTitle, periodTitle, generatedBy string, report WerkaArchiveResponse, reportID, verifyCode, verifyURL string, y int) int {
-	fillRect(page, 60, y, 1180, 260, color.RGBA{31, 37, 43, 255})
-	fillRect(page, 60, y, 1180, 14, color.RGBA{201, 167, 104, 255})
-
-	light := color.RGBA{247, 243, 234, 255}
-	muted := color.RGBA{222, 214, 198, 255}
-	drawText(page, textStyle{face: fonts.bold, color: muted}, 86, y+52, "ACCORD ARCHIVE REPORT")
-	drawText(page, textStyle{face: fonts.title, color: light}, 86, y+98, reportTitle)
-	drawText(page, textStyle{face: fonts.body, color: light}, 86, y+138, "Period: "+periodTitle)
-	drawText(page, textStyle{face: fonts.body, color: light}, 86, y+168, "Oraliq: "+report.From.Format("2006-01-02 15:04")+" -> "+report.To.Format("2006-01-02 15:04"))
-	drawText(page, textStyle{face: fonts.body, color: light}, 86, y+198, "Generated by: "+generatedBy)
-
-	fillRect(page, 805, y+34, 350, 188, color.RGBA{247, 243, 234, 255})
-	dark := color.RGBA{31, 37, 43, 255}
-	drawText(page, textStyle{face: fonts.bold, color: dark}, 830, y+74, "Compliance Panel")
-	drawText(page, textStyle{face: fonts.small, color: color.RGBA{80, 80, 80, 255}}, 830, y+100, "Mode: Flattened static copy")
-	drawText(page, textStyle{face: fonts.small, color: dark}, 830, y+126, "Report ID: "+reportID)
-	drawText(page, textStyle{face: fonts.small, color: dark}, 830, y+152, "Verify code: "+verifyCode)
-	drawMultilineText(page, textStyle{face: fonts.small, color: color.RGBA{80, 80, 80, 255}}, 830, y+178, "Verify URL: "+verifyURL, 270, 18)
-	return y + 290
-}
-
-func drawArchiveSummary(page *image.RGBA, fonts fontPack, summary WerkaArchiveSummary, y int) int {
-	fillRect(page, 60, y, 1180, 118, color.RGBA{244, 238, 227, 255})
-	drawText(page, textStyle{face: fonts.bold, color: color.Black}, 82, y+42, fmt.Sprintf("Yozuvlar soni: %d", summary.RecordCount))
-	x := 360
+	boxX := x + 18
+	drawSummaryMetric(page, fonts, boxX, y+14, 190, 44, "Yozuvlar soni", fmt.Sprintf("%d", summary.RecordCount))
+	boxX += 208
 	for _, total := range summary.TotalsByUOM {
-		fillRect(page, x, y+18, 220, 54, color.RGBA{255, 255, 255, 255})
-		drawText(page, textStyle{face: fonts.body, color: color.Black}, x+18, y+52, fmt.Sprintf("%s: %.2f", strings.TrimSpace(total.UOM), total.Qty))
-		x += 240
+		drawSummaryMetric(page, fonts, boxX, y+14, 150, 44, strings.TrimSpace(total.UOM), fmt.Sprintf("%.2f", total.Qty))
+		boxX += 168
 	}
-	return y + 144
+	return y + height
 }
 
-func drawArchiveTableHeader(page *image.RGBA, fonts fontPack, y int) int {
-	headerBg := color.RGBA{53, 67, 89, 255}
-	border := color.RGBA{99, 116, 142, 255}
-	headerStyle := textStyle{face: fonts.bold, color: color.White}
-	for _, col := range archiveColumns {
-		drawCellBox(page, col, y, 40, headerBg, border)
-		drawSingleCellLine(page, headerStyle, col, y, 40, col.label)
+func drawSummaryMetric(page *image.RGBA, fonts archiveFonts, x, y, width, height int, label, value string) {
+	fillRect(page, x, y, width, height, color.RGBA{255, 255, 255, 255})
+	strokeRect(page, x, y, width, height, color.RGBA{216, 223, 233, 255})
+	drawText(page, archiveTextStyle{face: fonts.meta, color: color.RGBA{90, 103, 122, 255}}, x+12, y+17, label)
+	drawText(page, archiveTextStyle{face: fonts.bodyBold, color: color.RGBA{32, 43, 59, 255}}, x+12, y+33, value)
+}
+
+func drawArchiveTableHeader(page *image.RGBA, fonts archiveFonts, y, height int) int {
+	for _, col := range corporateArchiveColumns {
+		fillRect(page, col.x, y, col.width, height, color.RGBA{53, 67, 89, 255})
+		strokeRect(page, col.x, y, col.width, height, color.RGBA{112, 129, 154, 255})
+		drawCellText(page, archiveTextStyle{face: fonts.header, color: color.White}, col, y, height, col.label)
 	}
-	return y + 40
+	return y + height
 }
 
-func archiveRowHeight(row tableRow, fonts fontPack) int {
-	_ = row
-	_ = fonts
-	return 28
-}
-
-func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra bool) {
-	height := archiveRowHeight(row, fonts)
-	rowBg := color.RGBA{255, 255, 255, 255}
+func drawArchiveRow(page *image.RGBA, fonts archiveFonts, row archiveRow, y, height int, zebra bool) {
+	bg := color.RGBA{255, 255, 255, 255}
 	if zebra {
-		rowBg = color.RGBA{245, 247, 251, 255}
+		bg = color.RGBA{244, 247, 251, 255}
 	}
-	grid := color.RGBA{219, 225, 236, 255}
+	grid := color.RGBA{220, 226, 234, 255}
 	statusBg := color.RGBA{255, 244, 204, 255}
-	dateStyle := textStyle{face: fonts.smallTight, color: color.RGBA{67, 73, 84, 255}}
-	bodyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{39, 43, 52, 255}}
-	qtyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{39, 43, 52, 255}}
-	statusStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{158, 110, 0, 255}}
+	bodyStyle := archiveTextStyle{face: fonts.body, color: color.RGBA{39, 48, 62, 255}}
+	statusStyle := archiveTextStyle{face: fonts.body, color: color.RGBA{164, 110, 0, 255}}
 
-	drawCellBox(page, dateColumn, y, height, rowBg, grid)
-	drawCellBox(page, docColumn, y, height, rowBg, grid)
-	drawCellBox(page, partyColumn, y, height, rowBg, grid)
-	drawCellBox(page, productColumn, y, height, rowBg, grid)
-	drawCellBox(page, qtyColumn, y, height, rowBg, grid)
-	drawCellBox(page, statusColumn, y, height, statusBg, grid)
-
-	drawSingleCellLine(page, dateStyle, dateColumn, y, height, compactArchiveDate(row.date))
-	drawSingleCellLine(page, bodyStyle, docColumn, y, height, row.docID)
-	drawSingleCellLine(page, bodyStyle, partyColumn, y, height, row.party)
-	drawSingleCellLine(page, bodyStyle, productColumn, y, height, archiveProductLine(row))
-	drawSingleCellLine(page, qtyStyle, qtyColumn, y, height, row.qty)
-	drawSingleCellLine(page, statusStyle, statusColumn, y, height, formatArchiveStatusLabel(row.status))
-}
-
-func drawArchiveFooter(page *image.RGBA, fonts fontPack, pageNumber int, reportID, verifyCode string) {
-	fillRect(page, 60, 1664, 1180, 30, color.RGBA{31, 37, 43, 255})
-	drawText(page, textStyle{face: fonts.small, color: color.RGBA{244, 238, 227, 255}}, 82, 1686, fmt.Sprintf("Page %d", pageNumber))
-	rightText := fmt.Sprintf("Protected flattened export • %s • %s", strings.TrimSpace(reportID), strings.TrimSpace(verifyCode))
-	drawText(page, textStyle{face: fonts.small, color: color.RGBA{210, 202, 186, 255}}, 610, 1686, fitStringToWidth(&font.Drawer{Face: fonts.small}, rightText, 610))
-}
-
-func drawStatusPill(page *image.RGBA, fonts fontPack, x, y int, value string) {
-	w := 150
-	fillRect(page, x, y, w, 34, statusPillColor(value))
-	drawText(page, textStyle{face: fonts.small, color: color.White}, x+16, y+22, value)
-}
-
-func statusPillColor(value string) color.RGBA {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pending":
-		return color.RGBA{173, 113, 37, 255}
-	case "accepted":
-		return color.RGBA{46, 125, 50, 255}
-	case "partial":
-		return color.RGBA{2, 119, 189, 255}
-	case "rejected", "cancelled":
-		return color.RGBA{183, 28, 28, 255}
-	default:
-		return color.RGBA{84, 84, 84, 255}
-	}
-}
-
-func formatArchiveStatusLabel(value string) string {
-	trimmed := strings.TrimSpace(strings.ToLower(value))
-	switch trimmed {
-	case "pending":
-		return "Pend."
-	case "accepted":
-		return "Acc."
-	case "partial":
-		return "Part."
-	case "rejected":
-		return "Rej."
-	case "cancelled":
-		return "Canc."
-	default:
-		if trimmed == "" {
-			return "-"
+	for _, col := range corporateArchiveColumns {
+		fill := color.Color(bg)
+		if col.label == "Status" {
+			fill = statusBg
 		}
-		return strings.ToUpper(trimmed[:1]) + trimmed[1:]
+		fillRect(page, col.x, y, col.width, height, fill)
+		strokeRect(page, col.x, y, col.width, height, grid)
+	}
+
+	values := []struct {
+		col   archiveColumn
+		text  string
+		style archiveTextStyle
+	}{
+		{corporateArchiveColumns[0], row.date, bodyStyle},
+		{corporateArchiveColumns[1], row.docID, bodyStyle},
+		{corporateArchiveColumns[2], row.party, bodyStyle},
+		{corporateArchiveColumns[3], row.item, bodyStyle},
+		{corporateArchiveColumns[4], row.qty, bodyStyle},
+		{corporateArchiveColumns[5], row.status, statusStyle},
+	}
+	for _, value := range values {
+		drawCellText(page, value.style, value.col, y, height, value.text)
 	}
 }
 
-func drawText(img *image.RGBA, style textStyle, x, y int, text string) {
+func drawArchiveFooter(page *image.RGBA, fonts archiveFonts, x, y, width, pageNumber int, reportID, verifyCode, verifyURL string) {
+	fillRect(page, x, y, width, 24, color.RGBA{235, 239, 244, 255})
+	strokeRect(page, x, y, width, 24, color.RGBA{216, 223, 233, 255})
+
+	left := fmt.Sprintf("Page %d", pageNumber)
+	right := fmt.Sprintf("Flattened static copy • %s • %s", strings.TrimSpace(reportID), strings.TrimSpace(verifyCode))
+	drawText(page, archiveTextStyle{face: fonts.footer, color: color.RGBA{72, 82, 98, 255}}, x+10, y+16, left)
+	drawText(page, archiveTextStyle{face: fonts.footer, color: color.RGBA{72, 82, 98, 255}}, x+260, y+16, fitStringToWidth(&font.Drawer{Face: fonts.footer}, right, 600))
+	drawText(page, archiveTextStyle{face: fonts.footer, color: color.RGBA{108, 118, 132, 255}}, x+890, y+16, fitStringToWidth(&font.Drawer{Face: fonts.footer}, verifyURL, 290))
+}
+
+func drawCellText(page *image.RGBA, style archiveTextStyle, col archiveColumn, y, height int, text string) {
+	drawer := &font.Drawer{Face: style.face}
+	fitted := fitStringToWidth(drawer, text, col.width-16)
+	textWidth := drawer.MeasureString(fitted).Ceil()
+	textX := col.x + 8
+	if col.align == "right" {
+		textX = col.x + col.width - 8 - textWidth
+	}
+	textY := y + (height / 2) + 3
+	drawText(page, style, textX, textY, fitted)
+}
+
+func drawText(img *image.RGBA, style archiveTextStyle, x, y int, text string) {
 	d := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(style.color),
@@ -466,126 +422,11 @@ func drawText(img *image.RGBA, style textStyle, x, y int, text string) {
 	d.DrawString(text)
 }
 
-func drawMultilineText(img *image.RGBA, style textStyle, x, y int, text string, maxRunesPerLine, lineHeight int) {
-	lines := wrapTextByRunes(text, maxRunesPerLine)
-	for index, line := range lines {
-		drawText(img, style, x, y+index*lineHeight, line)
-	}
-}
-
-func drawCellBox(page *image.RGBA, col archiveColumn, y, height int, fill, border color.Color) {
-	fillRect(page, col.x, y, col.width, height, fill)
-	fillRect(page, col.x, y, col.width, 1, border)
-	fillRect(page, col.x, y+height-1, col.width, 1, border)
-	fillRect(page, col.x, y, 1, height, border)
-	fillRect(page, col.x+col.width-1, y, 1, height, border)
-}
-
-func drawSingleCellLine(page *image.RGBA, style textStyle, col archiveColumn, y, height int, value string) {
-	drawer := &font.Drawer{Face: style.face}
-	fitted := fitStringToWidth(drawer, value, col.width-24)
-	textY := y + (height / 2) + 2
-	drawText(page, style, col.x+12, textY, fitted)
-}
-
-func drawCellLines(page *image.RGBA, style textStyle, col archiveColumn, y int, lines []string) {
-	lines = filterNonEmptyLines(lines)
-	if len(lines) == 0 {
-		return
-	}
-	drawer := &font.Drawer{Face: style.face}
-	for index, line := range lines {
-		fitted := fitStringToWidth(drawer, line, col.width-28)
-		drawText(page, style, col.x+14, y+28+index*22, fitted)
-	}
-}
-
-func drawCellText(page *image.RGBA, style textStyle, col archiveColumn, y, height int, text string, maxLines, lineHeight int) {
-	lines := wrapTextByWidth(style.face, text, col.width-28, maxLines)
-	for index, line := range lines {
-		drawText(
-			page,
-			style,
-			col.x+14,
-			y+24+index*lineHeight,
-			line,
-		)
-	}
-}
-
-func wrapTextByRunes(text string, maxRunesPerLine int) []string {
-	words := strings.Fields(strings.TrimSpace(text))
-	if len(words) == 0 {
-		return []string{""}
-	}
-	lines := make([]string, 0, 3)
-	current := words[0]
-	for _, word := range words[1:] {
-		candidate := current + " " + word
-		if len([]rune(candidate)) <= maxRunesPerLine {
-			current = candidate
-			continue
-		}
-		lines = append(lines, current)
-		current = word
-	}
-	lines = append(lines, current)
-	for i := range lines {
-		lines[i] = truncatePDFLine(lines[i], maxRunesPerLine)
-	}
-	if len(lines) > 2 {
-		return []string{lines[0], truncatePDFLine(strings.Join(lines[1:], " "), maxRunesPerLine)}
-	}
-	return lines
-}
-
-func wrappedLineCount(text string, maxRunesPerLine int) int {
-	return len(wrapTextByRunes(text, maxRunesPerLine))
-}
-
-func wrapTextByWidth(face font.Face, text string, maxWidth, maxLines int) []string {
-	if maxLines <= 0 {
-		maxLines = 1
-	}
-	paragraphs := strings.Split(strings.TrimSpace(text), "\n")
-	lines := make([]string, 0, maxLines)
-	drawer := &font.Drawer{Face: face}
-	for _, paragraph := range paragraphs {
-		words := strings.Fields(strings.TrimSpace(paragraph))
-		if len(words) == 0 {
-			continue
-		}
-		current := words[0]
-		for _, word := range words[1:] {
-			candidate := current + " " + word
-			if drawer.MeasureString(candidate).Ceil() <= maxWidth {
-				current = candidate
-				continue
-			}
-			lines = append(lines, fitStringToWidth(drawer, current, maxWidth))
-			current = word
-			if len(lines) >= maxLines {
-				break
-			}
-		}
-		if len(lines) < maxLines {
-			lines = append(lines, fitStringToWidth(drawer, current, maxWidth))
-		}
-		if len(lines) >= maxLines {
-			break
-		}
-	}
-	if len(lines) == 0 {
-		return []string{""}
-	}
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-	}
-	return lines
-}
-
 func fitStringToWidth(drawer *font.Drawer, value string, maxWidth int) string {
 	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
 	if drawer.MeasureString(trimmed).Ceil() <= maxWidth {
 		return trimmed
 	}
@@ -600,15 +441,19 @@ func fitStringToWidth(drawer *font.Drawer, value string, maxWidth int) string {
 	return "…"
 }
 
-func formatArchiveDate(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if idx := strings.Index(trimmed, " "); idx > 0 {
-		return trimmed[:idx] + "\n" + strings.TrimSpace(trimmed[idx+1:])
+func archiveProductName(item DispatchRecord) string {
+	itemName := strings.TrimSpace(item.ItemName)
+	itemCode := strings.TrimSpace(item.ItemCode)
+	if itemName == "" {
+		return itemCode
 	}
-	return trimmed
+	if itemCode == "" || strings.EqualFold(itemName, itemCode) {
+		return itemName
+	}
+	return itemName
 }
 
-func compactArchiveDate(value string) string {
+func formatArchiveDateForCell(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if idx := strings.Index(trimmed, " "); idx > 0 {
 		datePart := trimmed[:idx]
@@ -616,89 +461,28 @@ func compactArchiveDate(value string) string {
 		if dot := strings.Index(timePart, "."); dot > 0 {
 			timePart = timePart[:dot]
 		}
-		if len(datePart) >= 10 {
-			datePart = datePart[5:]
-		}
-		if len(timePart) >= 5 {
-			timePart = timePart[:5]
-		}
 		return datePart + " " + timePart
 	}
 	return trimmed
 }
 
-func archiveProductLine(row tableRow) string {
-	itemName := strings.TrimSpace(row.itemName)
-	itemCode := strings.TrimSpace(row.item)
-	if itemName == "" {
-		return itemCode
-	}
-	if itemCode == "" || strings.EqualFold(itemName, itemCode) {
-		return itemName
-	}
-	return itemName + " • " + itemCode
-}
-
-func splitArchiveDate(value string) (string, string) {
+func archiveStatusLabel(value string) string {
 	trimmed := strings.TrimSpace(value)
-	if idx := strings.Index(trimmed, " "); idx > 0 {
-		return trimmed[:idx], strings.TrimSpace(trimmed[idx+1:])
+	if trimmed == "" {
+		return "-"
 	}
-	return trimmed, ""
-}
-
-func archivePrimaryTitle(row tableRow) string {
-	itemName := strings.TrimSpace(row.itemName)
-	itemCode := strings.TrimSpace(row.item)
-	party := strings.TrimSpace(row.party)
-	if itemName != "" && !strings.EqualFold(itemName, party) {
-		return itemName
-	}
-	if itemCode != "" && !strings.EqualFold(itemCode, party) {
-		return itemCode
-	}
-	if itemName != "" {
-		return itemName
-	}
-	if itemCode != "" {
-		return itemCode
-	}
-	return party
-}
-
-func archiveSecondaryLine1(row tableRow, primary string) string {
-	party := strings.TrimSpace(row.party)
-	if party != "" && !strings.EqualFold(party, primary) {
-		return party
-	}
-	return ""
-}
-
-func archiveSecondaryLine2(row tableRow, primary string) string {
-	itemCode := strings.TrimSpace(row.item)
-	party := strings.TrimSpace(row.party)
-	if itemCode != "" &&
-		!strings.EqualFold(itemCode, primary) &&
-		!strings.EqualFold(itemCode, party) {
-		return itemCode
-	}
-	return ""
-}
-
-func filterNonEmptyLines(lines []string) []string {
-	result := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		result = append(result, trimmed)
-	}
-	return result
+	return strings.Title(strings.ToLower(trimmed))
 }
 
 func fillRect(img *image.RGBA, x, y, w, h int, c color.Color) {
 	draw.Draw(img, image.Rect(x, y, x+w, y+h), &image.Uniform{c}, image.Point{}, draw.Src)
+}
+
+func strokeRect(img *image.RGBA, x, y, w, h int, c color.Color) {
+	fillRect(img, x, y, w, 1, c)
+	fillRect(img, x, y+h-1, w, 1, c)
+	fillRect(img, x, y, 1, h, c)
+	fillRect(img, x+w-1, y, 1, h, c)
 }
 
 func buildRasterPDF(pages []*image.RGBA) []byte {
@@ -755,14 +539,6 @@ func buildImageObject(img *image.RGBA) string {
 	_, _ = zw.Write(raw)
 	_ = zw.Close()
 	return fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", w, h, compressed.Len(), compressed.String())
-}
-
-func truncatePDFLine(value string, maxRunes int) string {
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) <= maxRunes {
-		return string(runes)
-	}
-	return string(runes[:maxRunes-1]) + "…"
 }
 
 func buildArchiveReportID(kind WerkaArchiveKind) string {
