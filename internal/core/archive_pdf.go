@@ -322,26 +322,36 @@ func drawArchiveSummary(page *image.RGBA, fonts fontPack, summary WerkaArchiveSu
 }
 
 func drawArchiveTableHeader(page *image.RGBA, fonts fontPack, y int) int {
-	fillRect(page, 60, y, 1180, 54, color.RGBA{48, 48, 48, 255})
-	drawText(page, textStyle{face: fonts.bold, color: color.White}, 82, y+34, "Hisobot yozuvlari")
-	drawText(page, textStyle{face: fonts.small, color: color.RGBA{217, 211, 198, 255}}, 980, y+34, "Qty • Status")
-	return y + 72
+	fillRect(page, 60, y, 1180, 56, color.RGBA{48, 48, 48, 255})
+	header := textStyle{face: fonts.bold, color: color.White}
+	drawText(page, header, dateColumn.x+16, y+36, "Sana")
+	drawText(page, header, docColumn.x+16, y+36, "Hujjat")
+	drawText(page, header, partyColumn.x+16, y+36, "Counterparty")
+	drawText(page, header, productColumn.x+16, y+36, "Mahsulot")
+	drawText(page, header, qtyColumn.x+16, y+36, "Miqdor")
+	drawText(page, header, statusColumn.x+16, y+36, "Status")
+	return y + 68
 }
 
 func archiveRowHeight(row tableRow, fonts fontPack) int {
-	title := archivePrimaryTitle(row)
-	titleLines := wrapTextByWidth(fonts.bold, title, 520, 2)
-	lines := len(titleLines)
-	if line := archiveSecondaryLine1(row, title); line != "" {
-		lines++
+	dateLines := 2
+	docLines := 1
+	partyLines := len(wrapTextByWidth(fonts.body, strings.TrimSpace(row.party), partyColumn.width-24, 2))
+	if partyLines < 1 {
+		partyLines = 1
 	}
-	if line := archiveSecondaryLine2(row, title); line != "" {
-		lines++
+	productText := archiveProductLine(row)
+	productLines := len(wrapTextByWidth(fonts.body, productText, productColumn.width-24, 2))
+	if productLines < 1 {
+		productLines = 1
 	}
-	if lines < 3 {
-		return 96
+	maxLines := dateLines
+	for _, v := range []int{docLines, partyLines, productLines, 1, 1} {
+		if v > maxLines {
+			maxLines = v
+		}
 	}
-	return 116
+	return 18 + maxLines*22 + 16
 }
 
 func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra bool) {
@@ -351,36 +361,23 @@ func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra
 		bg = color.RGBA{249, 247, 242, 255}
 	}
 	fillRect(page, 60, y, 1180, height, bg)
-	fillRect(page, 60, y, 8, height, color.RGBA{201, 167, 104, 255})
 	fillRect(page, 60, y+height-1, 1180, 1, color.RGBA{226, 221, 212, 255})
+	fillRect(page, 60, y, 6, height, color.RGBA{201, 167, 104, 255})
+	for _, col := range []archiveColumn{docColumn, partyColumn, productColumn, qtyColumn, statusColumn} {
+		fillRect(page, col.x, y+10, 1, height-20, color.RGBA{234, 230, 222, 255})
+	}
 
 	datePart, timePart := splitArchiveDate(row.date)
 	metaStyle := textStyle{face: fonts.small, color: color.RGBA{95, 95, 95, 255}}
-	mainStyle := textStyle{face: fonts.bold, color: color.RGBA{25, 25, 25, 255}}
-	bodyStyle := textStyle{face: fonts.body, color: color.RGBA{58, 58, 58, 255}}
+	bodyStyle := textStyle{face: fonts.body, color: color.RGBA{38, 38, 38, 255}}
+	strongStyle := textStyle{face: fonts.bold, color: color.RGBA{28, 28, 28, 255}}
 
-	drawText(page, metaStyle, 90, y+28, datePart)
-	if timePart != "" {
-		drawText(page, metaStyle, 90, y+48, timePart)
-	}
-	drawText(page, metaStyle, 90, y+74, truncatePDFLine(row.docID, 24))
-
-	title := archivePrimaryTitle(row)
-	itemLines := wrapTextByWidth(fonts.bold, title, 520, 2)
-	for idx, line := range itemLines {
-		drawText(page, mainStyle, 300, y+30+idx*22, line)
-	}
-	nextY := y + 30 + len(itemLines)*22
-	if line := archiveSecondaryLine1(row, title); line != "" {
-		drawText(page, bodyStyle, 300, nextY, truncatePDFLine(line, 48))
-		nextY += 20
-	}
-	if line := archiveSecondaryLine2(row, title); line != "" {
-		drawText(page, metaStyle, 300, nextY, truncatePDFLine(line, 48))
-	}
-
-	drawText(page, textStyle{face: fonts.subtitle, color: color.RGBA{31, 37, 43, 255}}, 930, y+42, truncatePDFLine(row.qty, 12))
-	drawStatusPill(page, fonts, 930, y+56, formatArchiveStatusLabel(row.status))
+	drawCellLines(page, metaStyle, dateColumn, y, []string{datePart, timePart})
+	drawCellLines(page, metaStyle, docColumn, y, []string{truncatePDFLine(row.docID, 22)})
+	drawCellLines(page, bodyStyle, partyColumn, y, wrapTextByWidth(fonts.body, row.party, partyColumn.width-24, 2))
+	drawCellLines(page, strongStyle, productColumn, y, wrapTextByWidth(fonts.bold, archiveProductLine(row), productColumn.width-24, 2))
+	drawCellLines(page, strongStyle, qtyColumn, y, []string{truncatePDFLine(row.qty, 12)})
+	drawCellLines(page, bodyStyle, statusColumn, y, []string{formatArchiveStatusLabel(row.status)})
 }
 
 func drawArchiveFooter(page *image.RGBA, fonts fontPack, pageNumber int) {
@@ -432,6 +429,16 @@ func drawMultilineText(img *image.RGBA, style textStyle, x, y int, text string, 
 	lines := wrapTextByRunes(text, maxRunesPerLine)
 	for index, line := range lines {
 		drawText(img, style, x, y+index*lineHeight, line)
+	}
+}
+
+func drawCellLines(page *image.RGBA, style textStyle, col archiveColumn, y int, lines []string) {
+	lines = filterNonEmptyLines(lines)
+	if len(lines) == 0 {
+		return
+	}
+	for index, line := range lines {
+		drawText(page, style, col.x+14, y+28+index*22, line)
 	}
 }
 
@@ -543,6 +550,18 @@ func formatArchiveDate(value string) string {
 	return trimmed
 }
 
+func archiveProductLine(row tableRow) string {
+	itemName := strings.TrimSpace(row.itemName)
+	itemCode := strings.TrimSpace(row.item)
+	if itemName == "" {
+		return itemCode
+	}
+	if itemCode == "" || strings.EqualFold(itemName, itemCode) {
+		return itemName
+	}
+	return itemName + " • " + itemCode
+}
+
 func splitArchiveDate(value string) (string, string) {
 	trimmed := strings.TrimSpace(value)
 	if idx := strings.Index(trimmed, " "); idx > 0 {
@@ -587,6 +606,18 @@ func archiveSecondaryLine2(row tableRow, primary string) string {
 		return itemCode
 	}
 	return ""
+}
+
+func filterNonEmptyLines(lines []string) []string {
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func fillRect(img *image.RGBA, x, y, w, h int, c color.Color) {
