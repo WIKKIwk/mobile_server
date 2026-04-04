@@ -162,18 +162,28 @@ type fontPack struct {
 }
 
 type archiveColumn struct {
+	label string
 	x     int
 	width int
 }
 
 var (
-	dateColumn    = archiveColumn{x: 60, width: 170}
-	docColumn     = archiveColumn{x: 230, width: 180}
-	partyColumn   = archiveColumn{x: 410, width: 240}
-	productColumn = archiveColumn{x: 650, width: 330}
-	qtyColumn     = archiveColumn{x: 980, width: 100}
-	statusColumn  = archiveColumn{x: 1080, width: 100}
+	dateColumn    = archiveColumn{label: "Sana", x: 60, width: 170}
+	docColumn     = archiveColumn{label: "Hujjat", x: 230, width: 200}
+	partyColumn   = archiveColumn{label: "Counterparty", x: 430, width: 190}
+	productColumn = archiveColumn{label: "Mahsulot", x: 620, width: 330}
+	qtyColumn     = archiveColumn{label: "Miqdor", x: 950, width: 120}
+	statusColumn  = archiveColumn{label: "Status", x: 1070, width: 110}
 )
+
+var archiveColumns = []archiveColumn{
+	dateColumn,
+	docColumn,
+	partyColumn,
+	productColumn,
+	qtyColumn,
+	statusColumn,
+}
 
 func renderArchivePages(principal Principal, report WerkaArchiveResponse, reportID, verifyCode, verifyURL string) ([]*image.RGBA, error) {
 	const (
@@ -340,62 +350,48 @@ func drawArchiveSummary(page *image.RGBA, fonts fontPack, summary WerkaArchiveSu
 }
 
 func drawArchiveTableHeader(page *image.RGBA, fonts fontPack, y int) int {
-	fillRect(page, 60, y, 1180, 56, color.RGBA{48, 48, 48, 255})
-	header := textStyle{face: fonts.bold, color: color.White}
-	drawText(page, header, dateColumn.x+16, y+36, "Sana")
-	drawText(page, header, docColumn.x+16, y+36, "Hujjat")
-	drawText(page, header, partyColumn.x+16, y+36, "Counterparty")
-	drawText(page, header, productColumn.x+16, y+36, "Mahsulot")
-	drawText(page, header, qtyColumn.x+16, y+36, "Miqdor")
-	drawText(page, header, statusColumn.x+16, y+36, "Status")
-	return y + 68
+	headerBg := color.RGBA{53, 67, 89, 255}
+	border := color.RGBA{99, 116, 142, 255}
+	headerStyle := textStyle{face: fonts.bold, color: color.White}
+	for _, col := range archiveColumns {
+		drawCellBox(page, col, y, 58, headerBg, border)
+		drawSingleCellLine(page, headerStyle, col, y, 58, col.label)
+	}
+	return y + 58
 }
 
 func archiveRowHeight(row tableRow, fonts fontPack) int {
-	dateLines := 2
-	docLines := 1
-	partyLines := len(wrapTextByWidth(fonts.body, strings.TrimSpace(row.party), partyColumn.width-24, 2))
-	if partyLines < 1 {
-		partyLines = 1
-	}
-	productText := archiveProductLine(row)
-	productLines := len(wrapTextByWidth(fonts.body, productText, productColumn.width-24, 2))
-	if productLines < 1 {
-		productLines = 1
-	}
-	maxLines := dateLines
-	for _, v := range []int{docLines, partyLines, productLines, 1, 1} {
-		if v > maxLines {
-			maxLines = v
-		}
-	}
-	return 18 + maxLines*22 + 16
+	_ = row
+	_ = fonts
+	return 64
 }
 
 func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra bool) {
 	height := archiveRowHeight(row, fonts)
-	bg := color.RGBA{255, 255, 255, 255}
+	rowBg := color.RGBA{255, 255, 255, 255}
 	if zebra {
-		bg = color.RGBA{249, 247, 242, 255}
+		rowBg = color.RGBA{245, 247, 251, 255}
 	}
-	fillRect(page, 60, y, 1180, height, bg)
-	fillRect(page, 60, y+height-1, 1180, 1, color.RGBA{226, 221, 212, 255})
-	fillRect(page, 60, y, 6, height, color.RGBA{201, 167, 104, 255})
-	for _, col := range []archiveColumn{docColumn, partyColumn, productColumn, qtyColumn, statusColumn} {
-		fillRect(page, col.x, y+10, 1, height-20, color.RGBA{234, 230, 222, 255})
-	}
+	grid := color.RGBA{219, 225, 236, 255}
+	statusBg := color.RGBA{255, 244, 204, 255}
+	dateStyle := textStyle{face: fonts.smallTight, color: color.RGBA{67, 73, 84, 255}}
+	bodyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{39, 43, 52, 255}}
+	qtyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{39, 43, 52, 255}}
+	statusStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{158, 110, 0, 255}}
 
-	datePart, timePart := splitArchiveDate(row.date)
-	metaStyle := textStyle{face: fonts.smallTight, color: color.RGBA{95, 95, 95, 255}}
-	bodyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{38, 38, 38, 255}}
-	strongStyle := textStyle{face: fonts.boldTight, color: color.RGBA{28, 28, 28, 255}}
+	drawCellBox(page, dateColumn, y, height, rowBg, grid)
+	drawCellBox(page, docColumn, y, height, rowBg, grid)
+	drawCellBox(page, partyColumn, y, height, rowBg, grid)
+	drawCellBox(page, productColumn, y, height, rowBg, grid)
+	drawCellBox(page, qtyColumn, y, height, rowBg, grid)
+	drawCellBox(page, statusColumn, y, height, statusBg, grid)
 
-	drawCellLines(page, metaStyle, dateColumn, y, []string{datePart, timePart})
-	drawCellLines(page, metaStyle, docColumn, y, []string{row.docID})
-	drawCellLines(page, bodyStyle, partyColumn, y, wrapTextByWidth(fonts.body, row.party, partyColumn.width-24, 2))
-	drawCellLines(page, strongStyle, productColumn, y, wrapTextByWidth(fonts.boldTight, archiveProductLine(row), productColumn.width-24, 2))
-	drawCellLines(page, strongStyle, qtyColumn, y, []string{row.qty})
-	drawCellLines(page, bodyStyle, statusColumn, y, []string{formatArchiveStatusLabel(row.status)})
+	drawSingleCellLine(page, dateStyle, dateColumn, y, height, compactArchiveDate(row.date))
+	drawSingleCellLine(page, bodyStyle, docColumn, y, height, row.docID)
+	drawSingleCellLine(page, bodyStyle, partyColumn, y, height, row.party)
+	drawSingleCellLine(page, bodyStyle, productColumn, y, height, archiveProductLine(row))
+	drawSingleCellLine(page, qtyStyle, qtyColumn, y, height, row.qty)
+	drawSingleCellLine(page, statusStyle, statusColumn, y, height, formatArchiveStatusLabel(row.status))
 }
 
 func drawArchiveFooter(page *image.RGBA, fonts fontPack, pageNumber int) {
@@ -448,6 +444,21 @@ func drawMultilineText(img *image.RGBA, style textStyle, x, y int, text string, 
 	for index, line := range lines {
 		drawText(img, style, x, y+index*lineHeight, line)
 	}
+}
+
+func drawCellBox(page *image.RGBA, col archiveColumn, y, height int, fill, border color.Color) {
+	fillRect(page, col.x, y, col.width, height, fill)
+	fillRect(page, col.x, y, col.width, 1, border)
+	fillRect(page, col.x, y+height-1, col.width, 1, border)
+	fillRect(page, col.x, y, 1, height, border)
+	fillRect(page, col.x+col.width-1, y, 1, height, border)
+}
+
+func drawSingleCellLine(page *image.RGBA, style textStyle, col archiveColumn, y, height int, value string) {
+	drawer := &font.Drawer{Face: style.face}
+	fitted := fitStringToWidth(drawer, value, col.width-24)
+	textY := y + (height / 2) + 6
+	drawText(page, style, col.x+12, textY, fitted)
 }
 
 func drawCellLines(page *image.RGBA, style textStyle, col archiveColumn, y int, lines []string) {
@@ -566,6 +577,19 @@ func formatArchiveDate(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if idx := strings.Index(trimmed, " "); idx > 0 {
 		return trimmed[:idx] + "\n" + strings.TrimSpace(trimmed[idx+1:])
+	}
+	return trimmed
+}
+
+func compactArchiveDate(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if idx := strings.Index(trimmed, " "); idx > 0 {
+		datePart := trimmed[:idx]
+		timePart := strings.TrimSpace(trimmed[idx+1:])
+		if dot := strings.Index(timePart, "."); dot > 0 {
+			timePart = timePart[:dot]
+		}
+		return datePart + " " + timePart
 	}
 	return trimmed
 }
