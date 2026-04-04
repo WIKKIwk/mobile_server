@@ -1384,9 +1384,12 @@ func (s *Server) handleWerkaArchive(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
 		return
 	}
+	if hasCustomRange && strings.TrimSpace(string(period)) == "" {
+		period = WerkaArchivePeriodCustom
+	}
 	var response WerkaArchiveResponse
 	if hasCustomRange {
-		response, err = s.auth.WerkaArchiveForRange(r.Context(), kind, WerkaArchivePeriodCustom, from, to)
+		response, err = s.auth.WerkaArchiveForRange(r.Context(), kind, period, from, to)
 	} else {
 		response, err = s.auth.WerkaArchive(r.Context(), kind, period)
 	}
@@ -1418,9 +1421,12 @@ func (s *Server) handleWerkaArchivePDF(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid input"})
 		return
 	}
+	if hasCustomRange && strings.TrimSpace(string(period)) == "" {
+		period = WerkaArchivePeriodCustom
+	}
 	var file GeneratedFile
 	if hasCustomRange {
-		file, err = s.auth.WerkaArchivePDFForRange(r.Context(), principal, kind, from, to)
+		file, err = s.auth.WerkaArchivePDFForRange(r.Context(), principal, kind, period, from, to)
 	} else {
 		file, err = s.auth.WerkaArchivePDF(r.Context(), principal, kind, period)
 	}
