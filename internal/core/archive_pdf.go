@@ -168,12 +168,12 @@ type archiveColumn struct {
 }
 
 var (
-	dateColumn    = archiveColumn{label: "Sana", x: 60, width: 170}
-	docColumn     = archiveColumn{label: "Hujjat", x: 230, width: 200}
-	partyColumn   = archiveColumn{label: "Counterparty", x: 430, width: 190}
-	productColumn = archiveColumn{label: "Mahsulot", x: 620, width: 330}
-	qtyColumn     = archiveColumn{label: "Miqdor", x: 950, width: 120}
-	statusColumn  = archiveColumn{label: "Status", x: 1070, width: 110}
+	dateColumn    = archiveColumn{label: "Sana", x: 60, width: 150}
+	docColumn     = archiveColumn{label: "Hujjat", x: 210, width: 185}
+	partyColumn   = archiveColumn{label: "Counterparty", x: 395, width: 165}
+	productColumn = archiveColumn{label: "Mahsulot", x: 560, width: 425}
+	qtyColumn     = archiveColumn{label: "Miqdor", x: 985, width: 110}
+	statusColumn  = archiveColumn{label: "Status", x: 1095, width: 85}
 )
 
 var archiveColumns = []archiveColumn{
@@ -261,27 +261,27 @@ func loadArchiveFonts() (fontPack, error) {
 	if err != nil {
 		return fontPack{}, err
 	}
-	body, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 14, DPI: 144, Hinting: font.HintingFull})
+	body, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
-	bodyTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
+	bodyTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 10, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
-	small, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 11, DPI: 144, Hinting: font.HintingFull})
+	small, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 10, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
-	smallTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 10, DPI: 144, Hinting: font.HintingFull})
+	smallTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 8, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
-	bold, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 14, DPI: 144, Hinting: font.HintingFull})
+	bold, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
-	boldTight, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
+	boldTight, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 10, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
@@ -363,7 +363,7 @@ func drawArchiveTableHeader(page *image.RGBA, fonts fontPack, y int) int {
 func archiveRowHeight(row tableRow, fonts fontPack) int {
 	_ = row
 	_ = fonts
-	return 64
+	return 46
 }
 
 func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra bool) {
@@ -457,7 +457,7 @@ func drawCellBox(page *image.RGBA, col archiveColumn, y, height int, fill, borde
 func drawSingleCellLine(page *image.RGBA, style textStyle, col archiveColumn, y, height int, value string) {
 	drawer := &font.Drawer{Face: style.face}
 	fitted := fitStringToWidth(drawer, value, col.width-24)
-	textY := y + (height / 2) + 6
+	textY := y + (height / 2) + 4
 	drawText(page, style, col.x+12, textY, fitted)
 }
 
