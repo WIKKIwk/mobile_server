@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
@@ -531,7 +530,7 @@ func buildImageObject(img *image.RGBA) string {
 	w := img.Bounds().Dx()
 	h := img.Bounds().Dy()
 	var encoded bytes.Buffer
-	_ = jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 82})
+	_ = jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 95})
 	return fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", w, h, encoded.Len(), encoded.String())
 }
 
@@ -581,40 +580,22 @@ func archivePeriodTitle(period WerkaArchivePeriod) string {
 
 func applyArchiveAntiOCR(img *image.RGBA) {
 	bounds := img.Bounds()
-	scaledW := int(float64(bounds.Dx()) * 0.90)
-	scaledH := int(float64(bounds.Dy()) * 0.90)
-	if scaledW > 0 && scaledH > 0 {
-		reduced := image.NewRGBA(image.Rect(0, 0, scaledW, scaledH))
-		xdraw.ApproxBiLinear.Scale(reduced, reduced.Bounds(), img, bounds, draw.Src, nil)
-		xdraw.ApproxBiLinear.Scale(img, bounds, reduced, reduced.Bounds(), draw.Src, nil)
-	}
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			offset := img.PixOffset(x, y)
 			r := img.Pix[offset]
 			g := img.Pix[offset+1]
 			b := img.Pix[offset+2]
-			luma := (int(r)*299 + int(g)*587 + int(b)*114) / 1000
-			if luma < 236 {
-				wave := ((x*13 + y*7) % 17) - 8
-				img.Pix[offset] = clamp8(int(r) + wave)
-				img.Pix[offset+1] = clamp8(int(g) - wave/2)
-				img.Pix[offset+2] = clamp8(int(b) + wave/3)
-			}
-			if luma < 210 && (x+y)%3 == 0 {
-				img.Pix[offset] = mixChannel(img.Pix[offset], 247, 26)
-				img.Pix[offset+1] = mixChannel(img.Pix[offset+1], 244, 18)
-				img.Pix[offset+2] = mixChannel(img.Pix[offset+2], 238, 10)
-			}
-			if luma < 170 && x%5 == 0 {
-				img.Pix[offset] = clamp8(int(img.Pix[offset]) + 22)
-				img.Pix[offset+1] = clamp8(int(img.Pix[offset+1]) - 8)
-				img.Pix[offset+2] = clamp8(int(img.Pix[offset+2]) + 6)
+			if (x+y)%19 == 0 {
+				img.Pix[offset] = mixChannel(r, 248, 10)
+				img.Pix[offset+1] = mixChannel(g, 246, 10)
+				img.Pix[offset+2] = mixChannel(b, 241, 10)
+				continue
 			}
 			if y%4 == 0 {
-				img.Pix[offset] = mixChannel(img.Pix[offset], 244, 6)
-				img.Pix[offset+1] = mixChannel(img.Pix[offset+1], 243, 6)
-				img.Pix[offset+2] = mixChannel(img.Pix[offset+2], 239, 6)
+				img.Pix[offset] = mixChannel(r, 244, 4)
+				img.Pix[offset+1] = mixChannel(g, 243, 4)
+				img.Pix[offset+2] = mixChannel(b, 239, 4)
 			}
 		}
 	}
@@ -623,14 +604,4 @@ func applyArchiveAntiOCR(img *image.RGBA) {
 func mixChannel(base uint8, overlay uint8, alpha uint8) uint8 {
 	keep := int(255 - alpha)
 	return uint8((int(base)*keep + int(overlay)*int(alpha)) / 255)
-}
-
-func clamp8(value int) uint8 {
-	if value < 0 {
-		return 0
-	}
-	if value > 255 {
-		return 255
-	}
-	return uint8(value)
 }
