@@ -150,12 +150,15 @@ type tableRow struct {
 }
 
 type fontPack struct {
-	title     font.Face
-	subtitle  font.Face
-	body      font.Face
-	small     font.Face
-	bold      font.Face
-	watermark font.Face
+	title      font.Face
+	subtitle   font.Face
+	body       font.Face
+	bodyTight  font.Face
+	small      font.Face
+	smallTight font.Face
+	bold       font.Face
+	boldTight  font.Face
+	watermark  font.Face
 }
 
 type archiveColumn struct {
@@ -252,11 +255,23 @@ func loadArchiveFonts() (fontPack, error) {
 	if err != nil {
 		return fontPack{}, err
 	}
+	bodyTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
+	if err != nil {
+		return fontPack{}, err
+	}
 	small, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 11, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
+	smallTight, err := opentype.NewFace(regularTTF, &opentype.FaceOptions{Size: 10, DPI: 144, Hinting: font.HintingFull})
+	if err != nil {
+		return fontPack{}, err
+	}
 	bold, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 14, DPI: 144, Hinting: font.HintingFull})
+	if err != nil {
+		return fontPack{}, err
+	}
+	boldTight, err := opentype.NewFace(boldTTF, &opentype.FaceOptions{Size: 12, DPI: 144, Hinting: font.HintingFull})
 	if err != nil {
 		return fontPack{}, err
 	}
@@ -265,12 +280,15 @@ func loadArchiveFonts() (fontPack, error) {
 		return fontPack{}, err
 	}
 	return fontPack{
-		title:     title,
-		subtitle:  subtitle,
-		body:      body,
-		small:     small,
-		bold:      bold,
-		watermark: watermark,
+		title:      title,
+		subtitle:   subtitle,
+		body:       body,
+		bodyTight:  bodyTight,
+		small:      small,
+		smallTight: smallTight,
+		bold:       bold,
+		boldTight:  boldTight,
+		watermark:  watermark,
 	}, nil
 }
 
@@ -368,15 +386,15 @@ func drawArchiveRow(page *image.RGBA, fonts fontPack, row tableRow, y int, zebra
 	}
 
 	datePart, timePart := splitArchiveDate(row.date)
-	metaStyle := textStyle{face: fonts.small, color: color.RGBA{95, 95, 95, 255}}
-	bodyStyle := textStyle{face: fonts.body, color: color.RGBA{38, 38, 38, 255}}
-	strongStyle := textStyle{face: fonts.bold, color: color.RGBA{28, 28, 28, 255}}
+	metaStyle := textStyle{face: fonts.smallTight, color: color.RGBA{95, 95, 95, 255}}
+	bodyStyle := textStyle{face: fonts.bodyTight, color: color.RGBA{38, 38, 38, 255}}
+	strongStyle := textStyle{face: fonts.boldTight, color: color.RGBA{28, 28, 28, 255}}
 
 	drawCellLines(page, metaStyle, dateColumn, y, []string{datePart, timePart})
-	drawCellLines(page, metaStyle, docColumn, y, []string{truncatePDFLine(row.docID, 22)})
+	drawCellLines(page, metaStyle, docColumn, y, []string{row.docID})
 	drawCellLines(page, bodyStyle, partyColumn, y, wrapTextByWidth(fonts.body, row.party, partyColumn.width-24, 2))
-	drawCellLines(page, strongStyle, productColumn, y, wrapTextByWidth(fonts.bold, archiveProductLine(row), productColumn.width-24, 2))
-	drawCellLines(page, strongStyle, qtyColumn, y, []string{truncatePDFLine(row.qty, 12)})
+	drawCellLines(page, strongStyle, productColumn, y, wrapTextByWidth(fonts.boldTight, archiveProductLine(row), productColumn.width-24, 2))
+	drawCellLines(page, strongStyle, qtyColumn, y, []string{row.qty})
 	drawCellLines(page, bodyStyle, statusColumn, y, []string{formatArchiveStatusLabel(row.status)})
 }
 
@@ -437,8 +455,10 @@ func drawCellLines(page *image.RGBA, style textStyle, col archiveColumn, y int, 
 	if len(lines) == 0 {
 		return
 	}
+	drawer := &font.Drawer{Face: style.face}
 	for index, line := range lines {
-		drawText(page, style, col.x+14, y+28+index*22, line)
+		fitted := fitStringToWidth(drawer, line, col.width-28)
+		drawText(page, style, col.x+14, y+28+index*22, fitted)
 	}
 }
 
