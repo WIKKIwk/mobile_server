@@ -19,6 +19,7 @@ type Server struct {
 	sessions *SessionManager
 	push     *PushTokenStore
 	sender   pushSender
+	aiSearch *werkaAISearchService
 }
 
 func NewServer(auth *ERPAuthenticator) *Server {
@@ -66,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/home", s.handleWerkaHome)
 	mux.HandleFunc("/v1/mobile/werka/customers", s.handleWerkaCustomers)
 	mux.HandleFunc("/v1/mobile/werka/suppliers", s.handleWerkaSuppliers)
+	mux.HandleFunc("/v1/mobile/werka/ai-search-suggestion", s.handleWerkaAISearchSuggestion)
 	mux.HandleFunc("/v1/mobile/werka/supplier-items", s.handleWerkaSupplierItems)
 	mux.HandleFunc("/v1/mobile/werka/customer-items", s.handleWerkaCustomerItems)
 	mux.HandleFunc("/v1/mobile/werka/customer-item-options", s.handleWerkaCustomerItemOptions)

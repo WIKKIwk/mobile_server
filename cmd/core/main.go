@@ -100,6 +100,11 @@ func main() {
 		service,
 		mobileapi.NewPersistentSessionManager(sessionStorePath, sessionTTL),
 	)
+	server.SetWerkaAISearchConfig(
+		strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		strings.TrimSpace(os.Getenv("GEMINI_VISION_MODEL")),
+		cfg.RequestTimeout,
+	)
 	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := service.WarmupWerkaCustomerIssue(warmupCtx); err != nil {
 		log.Printf("werka customer issue warmup skipped: %v", err)
