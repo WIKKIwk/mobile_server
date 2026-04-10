@@ -1559,6 +1559,71 @@ func TestServerNotificationDetailAndCommentFlow(t *testing.T) {
 	}
 }
 
+func TestServerWerkaCustomerIssueBatchCreate(t *testing.T) {
+	fakeERP := &fakeERPClient{
+		items: []erpnext.Item{
+			{Code: "ITEM-001", Name: "Item 001", UOM: "Kg"},
+		},
+	}
+	server := NewServer(NewERPAuthenticator(
+		fakeERP,
+		"http://localhost:8000",
+		"key",
+		"secret",
+		"Stores - CH",
+		"10",
+		"20",
+		"20WERKA0001",
+		"+998901111111",
+		"Werka",
+		nil,
+		nil,
+	))
+	pushSender := &recordingPushSender{}
+	server.sender = pushSender
+	token, err := server.sessions.Create(Principal{
+		Role:        RoleWerka,
+		DisplayName: "Werka",
+		Ref:         "werka",
+	})
+	if err != nil {
+		t.Fatalf("failed to create werka session: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/mobile/werka/customer-issue/batch-create",
+		bytes.NewReader([]byte(`{"client_batch_id":"batch-1","lines":[{"customer_ref":"CUST-001","item_code":"ITEM-001","qty":2}]}`)),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected batch create status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var payload WerkaCustomerIssueBatchResult
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode batch create response: %v", err)
+	}
+	if payload.ClientBatchID != "batch-1" {
+		t.Fatalf("unexpected batch id: %+v", payload)
+	}
+	if len(payload.Created) != 1 || payload.Created[0].Record == nil {
+		t.Fatalf("expected one created record, got %+v", payload)
+	}
+	if payload.Created[0].LineIndex != 0 {
+		t.Fatalf("unexpected line index: %+v", payload.Created[0])
+	}
+	if len(payload.Failed) != 0 {
+		t.Fatalf("expected no failed lines, got %+v", payload.Failed)
+	}
+	if len(pushSender.calls) != 1 {
+		t.Fatalf("expected one push call, got %+v", pushSender.calls)
+	}
+}
+
 func TestServerCustomerHistoryReturnsCanonicalFullList(t *testing.T) {
 	notes := make([]erpnext.DeliveryNoteDraft, 0, 150)
 	for index := 0; index < 150; index++ {

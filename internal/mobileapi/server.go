@@ -1,6 +1,7 @@
 package mobileapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -71,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/customer-items", s.handleWerkaCustomerItems)
 	mux.HandleFunc("/v1/mobile/werka/customer-item-options", s.handleWerkaCustomerItemOptions)
 	mux.HandleFunc("/v1/mobile/werka/customer-issue/create", s.handleWerkaCustomerIssueCreate)
+	mux.HandleFunc("/v1/mobile/werka/customer-issue/batch-create", s.handleWerkaCustomerIssueBatchCreate)
 	mux.HandleFunc("/v1/mobile/werka/unannounced/create", s.handleWerkaUnannouncedCreate)
 	mux.HandleFunc("/v1/mobile/werka/status-breakdown", s.handleWerkaStatusBreakdown)
 	mux.HandleFunc("/v1/mobile/werka/status-details", s.handleWerkaStatusDetails)
@@ -1085,8 +1088,118 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 		record.Qty,
 		strings.TrimSpace(record.EntryID),
 	)
-	if err := s.sender.SendToKey(
-		r.Context(),
+	if err := s.sendWerkaCustomerIssuePush(r.Context(), record); err != nil {
+		log.Printf("push send failed for customer delivery note: %v", err)
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleWerkaCustomerIssueBatchCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleWerka); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	var req WerkaCustomerIssueBatchCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(req.Lines) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "lines are required"})
+		return
+	}
+
+	results := make([]WerkaCustomerIssueBatchLineResult, len(req.Lines))
+	workerCount := len(req.Lines)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				line := req.Lines[index]
+				record, err := s.auth.CreateWerkaCustomerIssue(
+					r.Context(),
+					principal,
+					line.CustomerRef,
+					line.ItemCode,
+					line.Qty,
+				)
+				if err != nil {
+					result := WerkaCustomerIssueBatchLineResult{
+						LineIndex: index,
+						Error:     "werka customer issue create failed",
+					}
+					if errors.Is(err, ErrInsufficientStock) {
+						result.Error = "insufficient stock"
+						result.ErrorCode = "insufficient_stock"
+					}
+					results[index] = result
+					continue
+				}
+				recordCopy := record
+				results[index] = WerkaCustomerIssueBatchLineResult{
+					LineIndex: index,
+					Record:    &recordCopy,
+				}
+			}
+		}()
+	}
+	for index := range req.Lines {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+
+	response := WerkaCustomerIssueBatchResult{
+		ClientBatchID: strings.TrimSpace(req.ClientBatchID),
+		Created:       make([]WerkaCustomerIssueBatchLineResult, 0, len(req.Lines)),
+		Failed:        make([]WerkaCustomerIssueBatchLineResult, 0, len(req.Lines)),
+	}
+	for _, result := range results {
+		if result.Record != nil {
+			log.Printf(
+				"werka customer issue batch created by=%s line=%d customer=%s item=%s qty=%.4f delivery_note=%s",
+				strings.TrimSpace(principal.Ref),
+				result.LineIndex,
+				strings.TrimSpace(result.Record.CustomerRef),
+				strings.TrimSpace(result.Record.ItemCode),
+				result.Record.Qty,
+				strings.TrimSpace(result.Record.EntryID),
+			)
+			if err := s.sendWerkaCustomerIssuePush(r.Context(), *result.Record); err != nil {
+				log.Printf("push send failed for customer delivery note batch line=%d: %v", result.LineIndex, err)
+			}
+			response.Created = append(response.Created, result)
+			continue
+		}
+		log.Printf(
+			"werka customer issue batch failed by=%s line=%d err=%s code=%s",
+			strings.TrimSpace(principal.Ref),
+			result.LineIndex,
+			strings.TrimSpace(result.Error),
+			strings.TrimSpace(result.ErrorCode),
+		)
+		response.Failed = append(response.Failed, result)
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) sendWerkaCustomerIssuePush(ctx context.Context, record WerkaCustomerIssueRecord) error {
+	return s.sender.SendToKey(
+		ctx,
 		string(RoleCustomer)+":"+strings.TrimSpace(record.CustomerRef),
 		"Werka mahsulot jo'natdi",
 		fmt.Sprintf("%s %.0f %s jo'natildi", strings.TrimSpace(record.ItemCode), record.Qty, strings.TrimSpace(record.UOM)),
@@ -1106,10 +1219,7 @@ func (s *Server) handleWerkaCustomerIssueCreate(w http.ResponseWriter, r *http.R
 			RoleCustomer,
 			record.CustomerRef,
 		),
-	); err != nil {
-		log.Printf("push send failed for customer delivery note: %v", err)
-	}
-	writeJSON(w, http.StatusOK, record)
+	)
 }
 
 func (s *Server) handleWerkaUnannouncedCreate(w http.ResponseWriter, r *http.Request) {

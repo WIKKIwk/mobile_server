@@ -180,6 +180,11 @@ type WerkaCustomerIssueCreateRequest struct {
 	Qty         float64 `json:"qty"`
 }
 
+type WerkaCustomerIssueBatchCreateRequest struct {
+	ClientBatchID string                            `json:"client_batch_id"`
+	Lines         []WerkaCustomerIssueCreateRequest `json:"lines"`
+}
+
 type WerkaCustomerIssueRecord struct {
 	EntryID      string  `json:"entry_id"`
 	CustomerRef  string  `json:"customer_ref"`
@@ -189,6 +194,19 @@ type WerkaCustomerIssueRecord struct {
 	UOM          string  `json:"uom"`
 	Qty          float64 `json:"qty"`
 	CreatedLabel string  `json:"created_label"`
+}
+
+type WerkaCustomerIssueBatchLineResult struct {
+	LineIndex int                       `json:"line_index"`
+	Record    *WerkaCustomerIssueRecord `json:"record,omitempty"`
+	Error     string                    `json:"error,omitempty"`
+	ErrorCode string                    `json:"error_code,omitempty"`
+}
+
+type WerkaCustomerIssueBatchResult struct {
+	ClientBatchID string                              `json:"client_batch_id"`
+	Created       []WerkaCustomerIssueBatchLineResult `json:"created"`
+	Failed        []WerkaCustomerIssueBatchLineResult `json:"failed"`
 }
 
 type SupplierUnannouncedResponseRequest struct {
