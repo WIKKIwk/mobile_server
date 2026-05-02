@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mobile/werka/archive/pdf", s.handleWerkaArchivePDF)
 	mux.HandleFunc("/v1/mobile/werka/confirm", s.handleWerkaConfirm)
 	mux.HandleFunc("/v1/mobile/admin/settings", s.handleAdminSettings)
+	mux.HandleFunc("/v1/mobile/admin/home/actions", s.handleAdminHomeActions)
 	mux.HandleFunc("/v1/mobile/admin/suppliers", s.handleAdminSuppliers)
 	mux.HandleFunc("/v1/mobile/admin/suppliers/list", s.handleAdminSupplierList)
 	mux.HandleFunc("/v1/mobile/admin/customers", s.handleAdminCustomers)
@@ -1923,6 +1924,47 @@ func (s *Server) handleAdminSupplierSummary(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleAdminHomeActions(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if err := requireRole(principal, RoleAdmin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	actions := []AdminHomeAction{
+		{
+			ID:          "erp_settings",
+			Title:       "ERP settings",
+			Subtitle:    "Core integration and stock defaults",
+			RouteName:   "/admin-settings",
+			Highlighted: true,
+		},
+		{
+			ID:          "suppliers",
+			Title:       "Suppliers",
+			Subtitle:    "List, mahsulot biriktirish va block nazorati",
+			RouteName:   "/admin-suppliers",
+			Highlighted: false,
+		},
+		{
+			ID:          "werka",
+			Title:       "Add Werka",
+			Subtitle:    "Configure warehouse worker phone and name",
+			RouteName:   "/admin-werka",
+			Highlighted: false,
+		},
+	}
+
+	writeJSON(w, http.StatusOK, actions)
 }
 
 func (s *Server) handleAdminSupplierDetail(w http.ResponseWriter, r *http.Request) {

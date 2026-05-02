@@ -920,6 +920,21 @@ func TestServerAdminSupplierManagementFlow(t *testing.T) {
 		t.Fatalf("unexpected summary status: %d", summaryResp.Code)
 	}
 
+	homeActionsReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/home/actions", nil)
+	homeActionsReq.Header.Set("Authorization", "Bearer "+token)
+	homeActionsResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(homeActionsResp, homeActionsReq)
+	if homeActionsResp.Code != http.StatusOK {
+		t.Fatalf("unexpected home actions status: %d", homeActionsResp.Code)
+	}
+	var homeActions []AdminHomeAction
+	if err := json.NewDecoder(homeActionsResp.Body).Decode(&homeActions); err != nil {
+		t.Fatalf("failed to decode home actions: %v", err)
+	}
+	if len(homeActions) != 3 {
+		t.Fatalf("unexpected home actions length: %d", len(homeActions))
+	}
+
 	statusReq := httptest.NewRequest(
 		http.MethodPut,
 		"/v1/mobile/admin/suppliers/status?ref=SUP-001",
