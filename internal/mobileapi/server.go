@@ -1595,13 +1595,29 @@ func (s *Server) handleAdminSuppliers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
-	items, err := s.auth.AdminSuppliers(r.Context(), 100)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "suppliers fetch failed"})
-		return
-	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, items)
+		summary, err := s.auth.AdminSupplierSummary(r.Context(), 300)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "supplier summary failed"})
+			return
+		}
+		suppliers, err := s.auth.AdminSuppliers(r.Context(), 100)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "suppliers fetch failed"})
+			return
+		}
+		customers, err := s.auth.AdminCustomers(r.Context(), 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customers fetch failed"})
+			return
+		}
+		page := AdminSuppliersPage{
+			Summary:   summary,
+			Suppliers: suppliers,
+			Customers: customers,
+			Settings:  s.auth.AdminSettings(),
+		}
+		writeJSON(w, http.StatusOK, page)
 		return
 	}
 	if r.Method == http.MethodPost {

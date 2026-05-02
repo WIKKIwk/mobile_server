@@ -299,6 +299,13 @@ type AdminSupplierSummary struct {
 	BlockedSuppliers int `json:"blocked_suppliers"`
 }
 
+type AdminSuppliersPage struct {
+	Summary   AdminSupplierSummary     `json:"summary"`
+	Suppliers []AdminSupplier          `json:"suppliers"`
+	Customers []CustomerDirectoryEntry `json:"customers"`
+	Settings  AdminSettings            `json:"settings"`
+}
+
 type AdminSupplierDetail struct {
 	Ref               string         `json:"ref"`
 	Name              string         `json:"name"`

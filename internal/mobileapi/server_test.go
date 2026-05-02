@@ -851,6 +851,22 @@ func TestServerAdminSupplierManagementFlow(t *testing.T) {
 		t.Fatalf("failed to create admin session: %v", err)
 	}
 
+	pageReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/suppliers", nil)
+	pageReq.Header.Set("Authorization", "Bearer "+token)
+	pageResp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageResp, pageReq)
+	if pageResp.Code != http.StatusOK {
+		t.Fatalf("unexpected suppliers page status: %d", pageResp.Code)
+	}
+
+	var page AdminSuppliersPage
+	if err := json.NewDecoder(pageResp.Body).Decode(&page); err != nil {
+		t.Fatalf("failed to decode suppliers page: %v", err)
+	}
+	if page.Summary.TotalSuppliers == 0 || len(page.Suppliers) == 0 {
+		t.Fatalf("unexpected suppliers page payload: %+v", page)
+	}
+
 	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/mobile/admin/suppliers/summary", nil)
 	summaryReq.Header.Set("Authorization", "Bearer "+token)
 	summaryResp := httptest.NewRecorder()
