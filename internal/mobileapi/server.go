@@ -1608,8 +1608,8 @@ func (s *Server) handleAdminSuppliers(w http.ResponseWriter, r *http.Request) {
 		}
 		customers, err := s.auth.AdminCustomers(r.Context(), 500)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customers fetch failed"})
-			return
+			log.Printf("admin suppliers customers fetch failed: %v", err)
+			customers = []CustomerDirectoryEntry{}
 		}
 		page := AdminSuppliersPage{
 			Summary:   summary,
